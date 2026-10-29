@@ -25,8 +25,19 @@
     </div>
     <script>
       var Module = {};
+      if (!window.crossOriginIsolated) {
+        document.getElementById("status").textContent =
+          "Open this page over HTTPS. On plain HTTP the browser disables SharedArrayBuffer, so the Linux guest cannot start.";
+        document.getElementById("bar").style.width = "0";
+      } else {
+        var loader = document.createElement("script");
+        loader.src = "/load.js";
+        document.body.appendChild(loader);
+        var boot = document.createElement("script");
+        boot.type = "module";
+        boot.src = "/boot.js?v=8";
+        document.body.appendChild(boot);
+      }
     </script>
-    <script src="/load.js"></script>
-    <script type="module" src="/boot.js?v=7"></script>
   </body>
 </html>

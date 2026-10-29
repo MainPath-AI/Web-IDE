@@ -19,6 +19,11 @@ html, body {
   font-family: var(--font);
 }
 
+#boot[hidden],
+#workspace[hidden] {
+  display: none !important;
+}
+
 #boot, #workspace {
   min-height: 100%;
 }

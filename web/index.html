@@ -4,44 +4,62 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Web-IDE</title>
-    <link rel="stylesheet" href="https://unpkg.com/xterm@5.3.0/css/xterm.css" />
     <link rel="stylesheet" href="/style.css" />
   </head>
   <body>
     <div id="boot">
       <p class="mark">Web-IDE</p>
-      <p id="status">Loading Linux into this tab.</p>
+      <p id="status">Loading VS Code</p>
       <div class="track" aria-hidden="true"><div id="bar"></div></div>
     </div>
-    <div id="workspace" hidden>
-      <header>
-        <strong>Web-IDE</strong>
-        <span id="guest-status">Guest is starting</span>
-      </header>
-      <div id="stage">
-        <div id="ide-wait">
-          <p class="mark">VS Code</p>
-          <p id="ide-detail">Starting in the guest. The editor replaces this panel when it answers.</p>
-        </div>
-        <iframe id="ide" title="VS Code" hidden></iframe>
-        <div id="terminal"></div>
-      </div>
-    </div>
+    <iframe id="ide" title="VS Code" hidden></iframe>
     <script>
-      var Module = {};
-      if (!window.crossOriginIsolated) {
-        document.getElementById("status").textContent =
-          "Open this page over HTTPS. On plain HTTP the browser disables SharedArrayBuffer, so the Linux guest cannot start.";
-        document.getElementById("bar").style.width = "0";
-      } else {
-        var loader = document.createElement("script");
-        loader.src = "/load.js";
-        document.body.appendChild(loader);
-        var boot = document.createElement("script");
-        boot.type = "module";
-        boot.src = "/boot.js?v=10";
-        document.body.appendChild(boot);
+      const statusEl = document.getElementById("status");
+      const barEl = document.getElementById("bar");
+      const bootEl = document.getElementById("boot");
+      const ideEl = document.getElementById("ide");
+      const started = Date.now();
+      let progress = 12;
+
+      const ticker = window.setInterval(() => {
+        progress = Math.min(progress + 4 + Math.random() * 7, 90);
+        barEl.style.width = progress + "%";
+      }, 180);
+
+      function editorOrigin() {
+        const host = location.hostname;
+        if (host.startsWith("web-ide.")) {
+          return location.protocol + "//ide." + host.slice("web-ide.".length);
+        }
+        return location.protocol + "//" + host + ":18080";
       }
+
+      async function editorReady() {
+        const response = await fetch("/ide-health", { redirect: "manual", cache: "no-store" });
+        if (response.type === "opaqueredirect") return true;
+        return response.status >= 200 && response.status < 400;
+      }
+
+      async function openEditor() {
+        while (true) {
+          try {
+            if (await editorReady()) break;
+          } catch (error) {
+            statusEl.textContent = "Waiting for VS Code";
+          }
+          await new Promise((resolve) => window.setTimeout(resolve, 400));
+        }
+        const remain = 1400 - (Date.now() - started);
+        if (remain > 0) await new Promise((resolve) => window.setTimeout(resolve, remain));
+        window.clearInterval(ticker);
+        barEl.style.width = "100%";
+        statusEl.textContent = "Opening VS Code";
+        ideEl.src = editorOrigin() + "/?folder=/home/coder/project";
+        ideEl.hidden = false;
+        bootEl.hidden = true;
+      }
+
+      openEditor();
     </script>
   </body>
 </html>

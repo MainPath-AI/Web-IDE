@@ -1,0 +1,30 @@
+name: Guest
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build the guest image
+        run: docker build --platform linux/amd64 -t web-ide-guest:ci guest
+
+      - name: Check the guest tools
+        run: |
+          docker run --rm --platform linux/amd64 --entrypoint bash web-ide-guest:ci -lc '
+            set -eu
+            . /root/.asdf/asdf.sh
+            test "$(uname -m)" = x86_64
+            python -c "import platform; assert platform.machine()==\"x86_64\""
+            node -e "if (process.arch !== \"x64\") process.exit(1)"
+            hugo version
+            code-server --version
+            command -v dockerd
+            test -x /opt/web-ide/demos/run-all.sh
+          '

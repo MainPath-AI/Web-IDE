@@ -1,0 +1,7 @@
+.tools/
+dist/
+*.log
+scripts/github-*.mjs
+scripts/probe.mjs
+scripts/read-code-log.mjs
+scripts/wait-ide.mjs

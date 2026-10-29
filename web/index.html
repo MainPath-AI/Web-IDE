@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Web-IDE</title>
+    <link rel="stylesheet" href="https://unpkg.com/xterm@5.3.0/css/xterm.css" />
+    <link rel="stylesheet" href="/style.css" />
+  </head>
+  <body>
+    <div id="boot">
+      <p class="mark">Web-IDE</p>
+      <p id="status">Loading Linux into this tab.</p>
+      <div class="track" aria-hidden="true"><div id="bar"></div></div>
+    </div>
+    <div id="workspace" hidden>
+      <header>
+        <strong>Web-IDE</strong>
+        <span id="guest-status">Guest is starting</span>
+      </header>
+      <div id="stage">
+        <iframe id="ide" title="code-server" hidden></iframe>
+        <div id="terminal"></div>
+      </div>
+    </div>
+    <script>
+      var Module = {};
+    </script>
+    <script src="/load.js"></script>
+    <script type="module" src="/boot.js?v=7"></script>
+  </body>
+</html>

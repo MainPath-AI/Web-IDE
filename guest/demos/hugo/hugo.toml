@@ -1,0 +1,6 @@
+baseURL = "https://example.invalid/"
+title = "Web-IDE Hugo"
+languageCode = "en"
+
+[module]
+  proxy = "off"

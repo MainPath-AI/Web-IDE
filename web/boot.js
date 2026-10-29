@@ -28,22 +28,73 @@ function note(line) {
   if (text.includes("WEB_IDE_READY")) guestStatusEl.textContent = "Shell ready";
   if (text.includes("WEB_IDE_PYTHON ")) guestStatusEl.textContent = text.trim();
   if (text.includes("WEB_IDE_NODE ")) guestStatusEl.textContent = text.trim();
-  if (text.includes("WEB_IDE_CODE_SERVER_HTTP ")) {
-    const port = new URLSearchParams(location.search).get("idePort") || "18080";
-    const ide = document.getElementById("ide");
-    ide.src = `${location.protocol}//${location.hostname}:${port}/`;
-    ide.hidden = false;
-    guestStatusEl.textContent = "code-server is open";
-  }
+  if (text.includes("WEB_IDE_CODE_SERVER_HTTP ")) openIde();
   if (text.includes("WEB_IDE_DOCKER_UP")) guestStatusEl.textContent = "Docker is running in the guest";
-  if (text.includes("WEB_IDE_DOCKER_DOWN")) {
+  if (text.includes("WEB_IDE_DOCKER_DOWN") && !ready) {
     guestStatusEl.textContent = "Docker daemon did not start";
   }
   if (!ready && text.includes("WEB_IDE_READY")) {
     ready = true;
     bootEl.hidden = true;
     workspaceEl.hidden = false;
+    guestStatusEl.textContent = "Starting VS Code";
     xterm.focus();
+    window.setTimeout(freeGuestCpu, 1500);
+    watchIde();
+  }
+}
+
+function ideOrigin() {
+  const explicit = new URLSearchParams(location.search).get("ide");
+  if (explicit) return explicit.replace(/\/$/, "");
+  const host = location.hostname;
+  if (host === "localhost" || host === "127.0.0.1") {
+    const port = new URLSearchParams(location.search).get("idePort") || "18080";
+    return `${location.protocol}//${host}:${port}`;
+  }
+  if (host.startsWith("web-ide.")) return `${location.protocol}//ide.${host.slice("web-ide.".length)}`;
+  return `${location.protocol}//ide.${host}`;
+}
+
+let ideOpened = false;
+
+function openIde() {
+  if (ideOpened) return;
+  ideOpened = true;
+  const ide = document.getElementById("ide");
+  const wait = document.getElementById("ide-wait");
+  ide.src = `${ideOrigin()}/?folder=/opt/web-ide/demos`;
+  ide.hidden = false;
+  if (wait) wait.hidden = true;
+  guestStatusEl.textContent = "VS Code is open";
+}
+
+function typeIntoGuest(text) {
+  const service = xterm._core && (xterm._core.coreService || xterm._core._coreService);
+  if (service && typeof service.triggerDataEvent === "function") {
+    service.triggerDataEvent(text, true);
+    return;
+  }
+  xterm.paste(text);
+}
+
+function freeGuestCpu() {
+  typeIntoGuest("pkill -x dockerd; pkill -x containerd\r");
+}
+
+async function watchIde() {
+  const deadline = Date.now() + 40 * 60 * 1000;
+  while (!ideOpened && Date.now() < deadline) {
+    try {
+      const response = await fetch("/ide-status", { redirect: "manual", cache: "no-store" });
+      if (response.status >= 200 && response.status < 400) {
+        openIde();
+        return;
+      }
+    } catch {
+      // The guest proxy is down until code-server listens.
+    }
+    await new Promise((resolve) => setTimeout(resolve, 4000));
   }
 }
 

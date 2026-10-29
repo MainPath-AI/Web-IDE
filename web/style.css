@@ -83,6 +83,25 @@ header {
   min-height: 0;
 }
 
+#ide-wait {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-end;
+  gap: 10px;
+  padding: 28px;
+  background: #1e1e1e;
+}
+
+#ide-wait .mark {
+  font-size: 28px;
+}
+
+#ide-wait[hidden],
+#ide[hidden] {
+  display: none !important;
+}
+
 #ide {
   flex: 1;
   min-height: 0;
@@ -92,7 +111,7 @@ header {
 }
 
 #terminal {
-  height: 220px;
+  height: 180px;
   min-height: 0;
   padding: 8px;
   border-top: 1px solid var(--line);

@@ -29,6 +29,13 @@ function note(line) {
   if (text.includes("WEB_IDE_PYTHON ")) guestStatusEl.textContent = text.trim();
   if (text.includes("WEB_IDE_NODE ")) guestStatusEl.textContent = text.trim();
   if (text.includes("WEB_IDE_CODE_SERVER_HTTP ")) openIde();
+  if (text.includes("WEB_IDE_CODE_SERVER_HTTP_FAIL")) {
+    guestStatusEl.textContent = "VS Code did not open";
+    const detail = document.getElementById("ide-detail");
+    if (detail) {
+      detail.textContent = "code-server is installed in the guest. This emulator does not get its Node process to listen, so the terminal below stays the working surface.";
+    }
+  }
   if (text.includes("WEB_IDE_DOCKER_UP")) guestStatusEl.textContent = "Docker is running in the guest";
   if (text.includes("WEB_IDE_DOCKER_DOWN") && !ready) {
     guestStatusEl.textContent = "Docker daemon did not start";

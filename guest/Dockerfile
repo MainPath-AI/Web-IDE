@@ -1,6 +1,12 @@
 # amd64 guest that QEMU-Wasm boots in the browser.
 # Built with: docker build --platform linux/amd64 -t web-ide-guest:local guest
 
+FROM --platform=$BUILDPLATFORM golang:1.26-bookworm AS workspace
+ARG TARGETARCH
+WORKDIR /src
+COPY workspace/ /src/
+RUN CGO_ENABLED=0 GOOS=linux GOARCH=${TARGETARCH:-amd64} go build -trimpath -ldflags='-s -w' -o /web-ide-workspace .
+
 FROM debian:bookworm-slim
 
 ENV DEBIAN_FRONTEND=noninteractive \
@@ -18,7 +24,12 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         xz-utils \
         iptables \
         procps \
+        busybox-static \
     && rm -rf /var/lib/apt/lists/*
+
+RUN update-alternatives --set iptables /usr/sbin/iptables-legacy \
+    && update-alternatives --set ip6tables /usr/sbin/ip6tables-legacy
+COPY --from=workspace /web-ide-workspace /usr/local/bin/web-ide-workspace
 
 ARG NODE_VERSION=20.19.5
 ARG HUGO_VERSION=0.168.0
@@ -78,10 +89,20 @@ RUN curl -fsSL -o /tmp/docker.tgz \
     && rm -f /tmp/docker.tgz
 
 COPY demos /opt/web-ide/demos
+COPY docker-start.sh /usr/local/bin/web-ide-docker
 COPY web-ide-init.sh /usr/local/bin/web-ide-init
-RUN chmod 755 /usr/local/bin/web-ide-init /opt/web-ide/demos/run-all.sh \
+RUN chmod 755 /usr/local/bin/web-ide-init /usr/local/bin/web-ide-docker /opt/web-ide/demos/run-all.sh \
     && printf '%s\n' 'export PATH=/root/.asdf/installs/python/3.12.7/bin:/root/.asdf/installs/nodejs/20.19.5/bin:/root/.asdf/installs/hugo/0.168.0/bin:/usr/local/bin:/usr/bin:/bin' 'cd /opt/web-ide/demos' > /root/.bashrc \
     && cp /root/.bashrc /root/.profile
+
+# An offline real container smoke test, independent of Docker Hub rate limits.
+RUN mkdir -p /tmp/docker-smoke/bin \
+    && cp /bin/busybox /tmp/docker-smoke/bin/ \
+    && ln -s busybox /tmp/docker-smoke/bin/sh \
+    && ln -s busybox /tmp/docker-smoke/bin/echo \
+    && ln -s busybox /tmp/docker-smoke/bin/uname \
+    && tar -C /tmp/docker-smoke -cf /opt/web-ide/docker-smoke.tar . \
+    && rm -rf /tmp/docker-smoke
 
 WORKDIR /opt/web-ide/demos
 ENTRYPOINT ["/usr/local/bin/web-ide-init"]

@@ -48,7 +48,17 @@ node node/hello.js
 
 Python, Node, and Hugo are installed in asdf's version directories. Shells use those executables directly, avoiding asdf initialization during startup; the `asdf` command remains available.
 
-Docker CLI and daemon binaries are included, but a working Docker daemon in this guest is **not supported or verified**. The previous runtime failed to set mount propagation to `shared` (`operation not permitted`). The presence of `docker` or `dockerd` is not evidence that containers can run.
+Docker starts on demand with `web-ide-docker`. The outer application container has mount and network capabilities **inside the browser VM**; it has no deployment-host Docker socket. The guest kernel includes bridge, veth, conntrack, and legacy iptables support. Docker uses the VFS storage driver, which favors compatibility over storage efficiency. Starting Docker and running containers still consume the browser guest's emulated CPU and RAM.
+
+An offline container check is bundled so it does not depend on a registry login or download:
+
+```bash
+web-ide-docker
+docker import /opt/web-ide/docker-smoke.tar web-ide-smoke:local
+docker run --rm web-ide-smoke:local /bin/sh -c 'echo docker-container-ok; uname -m'
+```
+
+Docker functional acceptance must include executing that container in a fresh browser guest; installed binaries or native container tests do not establish it.
 
 ## Build
 
@@ -62,7 +72,7 @@ Set `GO` if Go is not on the shell's path. Optional `WEB_IDE_IMAGE` and `WEB_IDE
 
 The build exports the pinned upstream tree into `dist/toolchain/`, applies the versioned patches from `patches/container2wasm/`, and passes both the patched Dockerfile and its matching assets to container2wasm. It preserves existing `.tools/` edits. Each build uses a fresh output directory under `dist/builds/`.
 
-The native build guest starts code-server before its RAM is captured. After HTTP readiness, the snapshot builder runs `scripts/warm-guest.mjs` against the actual VS Code management protocol: it requests the Linux environment, scans extensions, lists the demo directory, and starts the PTY host through a latency RPC. A warmup failure fails the build. This prepares guest services; it does not prove an interactive browser shell. The builder then waits for QEMU migration to complete before publishing the snapshot.
+The native build guest starts code-server before its RAM is captured. After HTTP readiness, the snapshot builder runs `scripts/warm-guest.mjs` against the actual VS Code management protocol: it requests the Linux environment, scans extensions, lists and streams a demo file, writes and reads back a temporary file, and creates and starts a real Bash PTY before shutting that warmup shell down. A warmup failure fails the build. The server uses V8's interpreter mode with one compilation worker to reduce competing compilation work on the single emulated CPU; user Node programs retain their normal runtime options. Native preparation still does not prove an interactive browser shell. The builder waits for QEMU migration to complete before publishing the snapshot.
 
 The outer guest init periodically synchronizes the restored system clock with the deployment Nginx's HTTP `Date` header through its fixed private gateway. It uses no external time service, proxy settings, or session credentials. This runs outside the application container, before its restricted capability set takes effect.
 
@@ -101,7 +111,11 @@ Editor resources use `Cross-Origin-Embedder-Policy: credentialless` and `Cross-O
 
 ## Browser sessions and persistence
 
-Guest changes live in the running browser VM. Saving a file updates that guest; it does not write the deployment image or upload a persistent workspace. Reloading or closing the tab discards runtime changes. Browser caching can reuse downloaded assets, but does not save the guest's modified disk or RAM. The packaged snapshot is a shared build-time starting point, not a user's saved session.
+Files under `/opt/web-ide/demos` are automatically backed up to IndexedDB **in this browser profile on this origin**, including new files and deletions. The footer displays the last completed backup and provides **Save workspace** and **Download backup**. After a file changes, leave the tab open until the footer confirms the backup before reloading or closing it. On the next page start the saved archive is restored into the new guest before VS Code opens. Nothing is uploaded to persistent storage on the deployment host.
+
+A backup is limited to 100 MiB and 20,000 entries. External symbolic links and special files are rejected. Backup errors, including a full browser quota, are visible and never replace the last committed backup. Browser storage can be cleared or evicted; download a backup for an independent copy. Only one tab per origin owns autosave. Additional tabs are explicitly marked temporary and cannot overwrite the owning tab's backup.
+
+This preserves workspace files, not the entire VM: running processes, installed tools, editor configuration outside the workspace, and Docker images/containers are not restored. The packaged RAM snapshot remains the common build-time starting point. Local and public URLs have separate browser storage.
 
 Each new page start creates a separate worker and virtual network. Unknown sessions cannot allocate resources through health or editor requests, and a second network connection using the same token is rejected. The network WebSocket owns the worker's lifetime: disconnection destroys it. Defaults limit the bridge to 16 active sessions, 30 minutes without incoming network packets, and four hours per session. Its internal listener has an additional private key so another guest cannot reach a worker through the existing host NAT route.
 

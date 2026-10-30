@@ -103,3 +103,38 @@
  CONFIG_ADVISE_SYSCALLS=y
  CONFIG_MEMBARRIER=y
  # CONFIG_KALLSYMS is not set
+--- a/cmd/create-spec/main.go
++++ b/cmd/create-spec/main.go
+@@ -327,6 +327,10 @@
+ 		ctdoci.WithEnv(ic.Env),
+ 		ctdoci.WithTTY,           // TODO: make it configurable
+ 		ctdoci.WithNewPrivileges, // TODO: make it configurable
++		// This container is inside the browser VM, never on the deployment
++		// host. Nested Docker needs the guest kernel's mount/network rights.
++		ctdoci.WithPrivileged,
++		ctdoci.WithAllDevicesAllowed,
+ 	)
+ 	if err != nil {
+ 		return nil, fmt.Errorf("failed to generate spec: %w", err)
+--- a/Dockerfile
++++ b/Dockerfile
+@@ -687,7 +687,18 @@
+ RUN apt-get install -y libelf-dev
+ WORKDIR /work-buildlinux/linux
+ COPY --link --from=assets ./config/qemu/linux_x86_config ./.config
+-RUN make ARCH=x86 CROSS_COMPILE=x86_64-linux-gnu- -j$(nproc) all && \
++RUN scripts/config --enable NETFILTER --enable NETFILTER_ADVANCED \
++      --enable NF_CONNTRACK --enable NF_NAT --enable NETFILTER_XTABLES \
++      --enable NETFILTER_XT_MARK --enable NETFILTER_XT_MATCH_ADDRTYPE \
++      --enable NETFILTER_XT_MATCH_CONNTRACK --enable NETFILTER_XT_MATCH_COMMENT \
++      --enable NETFILTER_XT_TARGET_MASQUERADE --enable NETFILTER_XT_TARGET_CHECKSUM \
++      --enable IP_NF_IPTABLES --enable IP_NF_FILTER --enable IP_NF_NAT \
++      --enable IP_NF_TARGET_MASQUERADE --enable BRIDGE --enable BRIDGE_NETFILTER \
++      --enable VETH --enable NETFILTER_XT_MATCH_PHYSDEV \
++      --enable IP6_NF_IPTABLES --enable IP6_NF_FILTER --enable IP6_NF_NAT \
++      --enable POSIX_MQUEUE && \
++    make ARCH=x86 CROSS_COMPILE=x86_64-linux-gnu- olddefconfig && \
++    make ARCH=x86 CROSS_COMPILE=x86_64-linux-gnu- -j$(nproc) all && \
+     mkdir /out && \
+     mv /work-buildlinux/linux/arch/x86/boot/bzImage /out/bzImage && \
+     make clean

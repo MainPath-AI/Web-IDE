@@ -13,6 +13,11 @@
       <div class="track" aria-hidden="true"><div id="bar"></div></div>
     </div>
     <iframe id="ide" title="VS Code" hidden></iframe>
+    <div id="workspace-tools" hidden>
+      <span id="workspace-status" role="status">Preparing workspace…</span>
+      <button id="save-workspace" type="button">Save workspace</button>
+      <button id="download-workspace" type="button">Download backup</button>
+    </div>
     <script>
       var Module = {};
       window.__webIdeBoot = { runtimeReady: false, guestReady: false, error: null, session: null };
@@ -96,6 +101,15 @@
           if (window.__webIdeBoot.error) return;
           try {
             if (await editorReady()) {
+              statusEl.textContent = "Restoring your workspace";
+              try {
+                await loadScript("/workspace.js", "module");
+                await window.webIdeWorkspace.initialize(window.__webIdeBoot.session);
+              } catch (error) {
+                window.__webIdeBoot.error = String(error);
+                statusEl.textContent = "Your workspace could not be restored. The saved backup is unchanged. Reload to try again.";
+                return;
+              }
               statusEl.textContent = "Opening VS Code";
               document.getElementById("bar").style.width = "100%";
               ideEl.src = editorOrigin() + `/sessions/${window.__webIdeBoot.session}/editor/?folder=/opt/web-ide/demos`;

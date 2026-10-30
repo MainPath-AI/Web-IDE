@@ -163,7 +163,7 @@ func (b *bridge) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		// including gVisor's otherwise uncloseable DNS/DHCP goroutines.
 		defer b.release(token, s)
 	} else {
-		if route != "/health" && !strings.HasPrefix(route, "/editor/") {
+		if route != "/health" && !strings.HasPrefix(route, "/editor/") && !strings.HasPrefix(route, "/workspace/") {
 			http.NotFound(w, r)
 			return
 		}
@@ -248,16 +248,19 @@ func (c *idleConn) Read(p []byte) (int, error) {
 	return c.Conn.Read(p)
 }
 
-func guestProxy(network guestNetwork) *httputil.ReverseProxy {
-	proxy := httputil.NewSingleHostReverseProxy(&url.URL{Scheme: "http", Host: guestAddress})
+func guestProxyTo(network guestNetwork, address string) *httputil.ReverseProxy {
+	proxy := httputil.NewSingleHostReverseProxy(&url.URL{Scheme: "http", Host: address})
 	proxy.Transport = &http.Transport{
 		Proxy: nil,
 		DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
 			timeout, cancel := context.WithTimeout(ctx, 15*time.Second)
 			defer cancel()
-			return network.DialContextTCP(timeout, guestAddress)
+			return network.DialContextTCP(timeout, address)
 		},
 		ResponseHeaderTimeout: 40 * time.Second,
+	}
+	if address == "192.168.127.3:9090" {
+		proxy.Transport.(*http.Transport).ResponseHeaderTimeout = 2 * time.Minute
 	}
 	proxy.ErrorLog = log.New(io.Discard, "", 0)
 	proxy.ErrorHandler = func(w http.ResponseWriter, _ *http.Request, _ error) {
@@ -271,6 +274,10 @@ func guestProxy(network guestNetwork) *httputil.ReverseProxy {
 		return nil
 	}
 	return proxy
+}
+
+func guestProxy(network guestNetwork) *httputil.ReverseProxy {
+	return guestProxyTo(network, guestAddress)
 }
 
 func workerHandshake(config *websocket.Config, request *http.Request) error {
@@ -328,6 +335,7 @@ func workerHandler(network guestNetwork, idle time.Duration, connected, done cha
 		proxy.ServeHTTP(w, request)
 	})
 	mux.Handle("/editor/", http.StripPrefix("/editor", proxy))
+	mux.Handle("/workspace/", http.StripPrefix("/workspace", guestProxyTo(network, "192.168.127.3:9090")))
 	return mux
 }
 

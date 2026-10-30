@@ -32,6 +32,7 @@ import { pathToFileURL } from "node:url";
 
 export const VSCODE_VERSION = "1.143.1";
 const LIMIT = 64 * 1024 * 1024;
+class VSBuffer { constructor(buffer) { this.buffer = buffer; } }
 
 function varint(value) {
   let number = value >>> 0;
@@ -53,6 +54,7 @@ export function serialize(value) {
     return Buffer.concat([Buffer.from([1]), varint(bytes.length), bytes]);
   }
   if (Buffer.isBuffer(value)) return Buffer.concat([Buffer.from([2]), varint(value.length), value]);
+  if (value instanceof VSBuffer) return Buffer.concat([Buffer.from([3]), varint(value.buffer.length), value.buffer]);
   if (Array.isArray(value)) return Buffer.concat([Buffer.from([4]), varint(value.length), ...value.map(serialize)]);
   if (typeof value === "number" && (value | 0) === value) return Buffer.concat([Buffer.from([6]), varint(value)]);
   const bytes = Buffer.from(JSON.stringify(value));
@@ -192,6 +194,7 @@ class ManagementClient {
   initialized = deferred();
   closed = deferred();
   pending = new Map();
+  streams = new Map();
   unacknowledged = new Map();
   nextMessage = 0;
   receivedMessage = 0;
@@ -227,6 +230,7 @@ class ManagementClient {
     this.handshake.reject(error);
     this.initialized.reject(error);
     for (const request of this.pending.values()) request.reject(error);
+    for (const stream of this.streams.values()) stream.reject(error);
     this.pending.clear();
   }
 
@@ -286,7 +290,8 @@ class ManagementClient {
       this.send(1, Buffer.concat([serialize([202, id]), serialize({ name: "Unknown channel", message: "The native warmup client does not provide this channel" })]));
       return;
     }
-    if (type === 102 || type === 101 || type === 103 || type === 204) return;
+    if (type === 204) { this.streams.get(id)?.accept(body.value); return; }
+    if (type === 102 || type === 101 || type === 103) return;
     const request = this.pending.get(id);
     if (!request || ![201, 202, 203].includes(type)) throw new Error("Unexpected IPC response");
     this.pending.delete(id);
@@ -326,6 +331,26 @@ class ManagementClient {
       this.socket.close(1000, "Native warmup complete");
     } else if (this.socket.readyState === 0) this.socket.close();
     if (this.socket.readyState !== 3) await deadline(this.closed.promise, 3000, "WebSocket close");
+  }
+
+  async readFileStream(uri) {
+    const id = this.nextRequest++;
+    const result = deferred();
+    const chunks = [];
+    this.streams.set(id, {
+      reject: result.reject,
+      accept: value => {
+        if (Buffer.isBuffer(value)) chunks.push(value);
+        else if (value === "end") result.resolve(Buffer.concat(chunks));
+        else result.reject(new Error("Guest file stream failed"));
+      },
+    });
+    this.send(1, Buffer.concat([serialize([102, id, "remoteFilesystem", "readFileStream"]), serialize([uri, {}])]));
+    try { return await deadline(result.promise, this.timeoutMs, "Guest file stream"); }
+    finally {
+      this.streams.delete(id);
+      if (!this.error) this.send(1, Buffer.concat([serialize([103, id]), serialize(undefined)]));
+    }
   }
 }
 
@@ -368,11 +393,37 @@ export async function warmGuest(backendURL, { timeoutMs = 120000, WebSocketImpl 
       if (!entries.some((entry) => entry[0] === name && (entry[1] & type))) throw new Error(`Guest demo entry is missing: ${name}`);
     }
     log("guest demo directory ready");
+    const resource = path => ({ $mid: 1, scheme: "vscode-remote", authority: "warmup", path });
+    log("BEGIN guest file read and write");
+    const source = await client.readFileStream(resource("/opt/web-ide/demos/run-all.sh"));
+    if (!source.toString("utf8").includes("python/hello.py")) throw new Error("Guest demo file could not be read");
+    const probe = resource("/tmp/web-ide-warmup.txt");
+    const probeBytes = Buffer.from("web-ide native file warmup\n");
+    await client.call("remoteFilesystem", "writeFile", [probe, new VSBuffer(probeBytes), { create: true, overwrite: true, unlock: false, atomic: false }]);
+    const saved = await client.call("remoteFilesystem", "readFile", [probe, {}]);
+    if (!Buffer.isBuffer(saved) || !saved.equals(probeBytes)) throw new Error("Guest file save did not round trip");
+    await client.call("remoteFilesystem", "delete", [probe, { recursive: false, useTrash: false, atomic: false }]);
+    log("guest file read and write ready");
     log("BEGIN PTY host");
     const latency = await client.call("remoteterminal", "$getLatency", []);
     if (!Array.isArray(latency) || !latency.length || latency.some((entry) => typeof entry?.latency !== "number" || !Number.isFinite(entry.latency) || entry.latency < 0)) throw new Error("PTY host did not return a latency response");
     log("PTY host ready");
-    return { commit: configuration.commit, extensionCount: extensions.length, demoEntryCount: entries.length, ptyHostReady: true };
+    log("BEGIN actual Bash PTY");
+    const terminal = await client.call("remoteterminal", "$createProcess", {
+      shellLaunchConfig: { executable: "/bin/bash", args: ["--noprofile", "--norc"], cwd: "/opt/web-ide/demos", useShellEnvironment: false },
+      workspaceFolders: [], resolverEnv: {}, resolvedVariables: {}, envVariableCollections: [],
+      configuration: { "terminal.integrated.env.linux": { NODE_OPTIONS: null }, "terminal.integrated.detectLocale": "off" },
+      cols: 80, rows: 24, unicodeVersion: "11", shouldPersistTerminal: false,
+      workspaceId: "web-ide-warmup", workspaceName: "demos", options: { shellIntegration: { enabled: false } },
+    });
+    const terminalId = terminal?.persistentTerminalId;
+    if (!Number.isInteger(terminalId) || terminalId < 1) throw new Error("Guest did not create a real PTY");
+    try {
+      const startError = await client.call("remoteterminal", "$start", [terminalId]);
+      if (startError) throw new Error("Guest Bash PTY did not start");
+    } finally { await client.call("remoteterminal", "$shutdown", [terminalId, true]); }
+    log("actual Bash PTY ready");
+    return { commit: configuration.commit, extensionCount: extensions.length, demoEntryCount: entries.length, ptyHostReady: true, fileSaveReady: true, bashPtyReady: true };
   } finally {
     await client.close();
   }

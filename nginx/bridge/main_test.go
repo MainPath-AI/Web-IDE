@@ -326,3 +326,28 @@ func TestGuestProxyPathQueryAndPrivateWorkerAuthentication(t *testing.T) {
 		}
 	}
 }
+
+func TestWorkspaceTrafficStaysInItsOwnGuestService(t *testing.T) {
+	guest := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/archive" || r.Header.Get("X-Web-IDE-Workspace") != "1" {
+			t.Error("workspace request was changed")
+		}
+		if r.Header.Get("X-Web-IDE-Worker-Key") != "" {
+			t.Error("worker key leaked")
+		}
+		_, _ = w.Write([]byte("workspace archive"))
+	}))
+	defer guest.Close()
+	network := &dialNetwork{address: strings.TrimPrefix(guest.URL, "http://")}
+	handler := workerHandler(network, time.Minute, make(chan struct{}, 1), make(chan struct{}, 1))
+	r := request("/workspace/archive", false)
+	r.Header.Set("X-Web-IDE-Workspace", "1")
+	w := httptest.NewRecorder()
+	handler.ServeHTTP(w, r)
+	if w.Code != 200 || w.Body.String() != "workspace archive" {
+		t.Fatal("workspace proxy failed")
+	}
+	if len(network.dials) != 1 || network.dials[0] != "192.168.127.3:9090" {
+		t.Fatal("workspace proxy dial escaped its guest service")
+	}
+}

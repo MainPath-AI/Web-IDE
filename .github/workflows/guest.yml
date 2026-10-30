@@ -31,7 +31,7 @@ jobs:
         run: |
           node --test scripts/*.test.mjs
           python3 -m unittest discover -s scripts/tests -v
-          for script in scripts/build.sh scripts/run.sh guest/web-ide-init.sh; do
+          for script in scripts/build.sh scripts/run.sh guest/web-ide-init.sh guest/docker-start.sh; do
             bash -n "$script"
           done
           sh -n nginx/entrypoint.sh
@@ -44,6 +44,9 @@ jobs:
           go test ./cmd/get-qemu-state
           go test ./cmd/init/web-ide-clock.go ./cmd/init/web-ide-clock_test.go
           go test -race "$GITHUB_WORKSPACE/nginx/bridge/main.go" "$GITHUB_WORKSPACE/nginx/bridge/main_test.go"
+      - name: Test safe workspace backup and restore
+        working-directory: guest/workspace
+        run: go test -race ./...
 
   smoke:
     needs: regression

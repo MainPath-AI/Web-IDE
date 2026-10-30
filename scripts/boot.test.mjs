@@ -45,6 +45,7 @@ function harness() {
     initEmscriptenModule: async (module) => { module.onRuntimeInitialized(); },
     fetch: async () => ({ status: 200, ok: true, type: "basic", json: async () => manifest() }),
     setTimeout,
+    webIdeWorkspace: { initialize: async () => {} },
   });
   context.window = context;
   for (const script of pageScripts) vm.runInContext(script, context);
@@ -117,6 +118,10 @@ test("the data loader finishes before the module starts, then a healthy guest op
   assert.equal(h.scripts[1].type, "module");
   h.context.__webIdeBoot.runtimeReady = true;
   h.scripts[1].onload();
+  await new Promise(setImmediate);
+  assert.equal(h.scripts[2].src, "/workspace.js");
+  assert.equal(h.elements.ide.hidden, true, "editor opened before restoring the workspace");
+  h.scripts[2].onload();
   await started;
   assert.equal(h.elements.ide.src, `http://localhost:18080/sessions/${h.context.__webIdeBoot.session}/editor/?folder=/opt/web-ide/demos`);
   assert.equal(h.elements.ide.hidden, false);
@@ -134,6 +139,20 @@ test("a loader error stops startup with an actionable message", async () => {
   assert.match(h.context.__webIdeBoot.error, /Could not load .*\/load.js\?v=/);
   assert.match(h.elements.status.textContent, /Reload to try again/);
   assert.equal(h.elements.ide.hidden, true);
+});
+
+test("a failed workspace restore cannot open an empty editor or retry into a fresh workspace", async () => {
+  const h = harness();
+  h.context.__webIdeBoot.runtimeReady = true;
+  h.context.webIdeWorkspace.initialize = async () => { throw new Error("stored backup is corrupt"); };
+  const opened = h.context.openEditor();
+  await new Promise(setImmediate);
+  assert.equal(h.scripts[0].src, "/workspace.js");
+  h.scripts[0].onload();
+  await opened;
+  assert.equal(h.elements.ide.hidden, true);
+  assert.match(h.context.__webIdeBoot.error, /corrupt/);
+  assert.match(h.elements.status.textContent, /backup is unchanged/);
 });
 
 test("the diagnostic console feeds the bundled PTY's real guest input queue", () => {

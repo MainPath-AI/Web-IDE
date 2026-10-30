@@ -6,7 +6,7 @@ The page loads a QEMU-Wasm emulator and a Debian amd64 guest, displays loading p
 
 ## Current status
 
-The in-browser editor connection is under active verification. A visible editor, a successful HTTP health check, or a green native guest test does not establish that its file tree and integrated terminal work. End-to-end acceptance still requires a fresh browser start, opening and saving a guest file, a working integrated Bash terminal, and execution of all three demos. Snapshot restore and a subsequent browser start also need verification. This README does not claim that acceptance is complete.
+A local browser guest has passed functional checks for the demo file tree, opening and saving a guest file, integrated Bash, and all three demos. Startup and first use can still take several minutes on the client: a visible editor or successful HTTP health check can precede working file operations. This remains experimental. Each published image and deployment needs its own fresh-browser verification; native guest tests alone do not establish browser acceptance.
 
 ## Architecture
 
@@ -17,6 +17,8 @@ One deployment image contains:
 - Browser assets copied from the exact code-server guest image, including VS Code workers, built-in extensions, fonts, and terminal assets. Nginx serves these static files to avoid transferring them through the emulated CPU.
 
 code-server itself runs in the guest. Nginx proxies its session document and session APIs, including file operations and terminal connections, through that guest's worker. There is no host-side code-server service. The older `ide/` directory describes an abandoned native editor approach and is not used by `scripts/build.sh`.
+
+The editor WebSocket proxy disables per-message compression, keeping its zlib queues out of the emulated guest's request path. Other routes retain their original negotiation, including the emulator's network transport.
 
 The page listens on container port `80`; the editor proxy listens on `18080`. `/sessions/<token>/net` carries the browser emulator's network connection, `/sessions/<token>/health` checks its editor, and `/sessions/<token>/editor/` proxies that guest's port `8080`. Guests use the same private address inside separate virtual networks; there is no shared forwarded editor port. Runtime workspaces are not mounted from the deployment host into the guest. The bundled xterm-pty 0.10.1 matches the emulator compiler's PTY integration.
 

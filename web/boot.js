@@ -1,144 +1,73 @@
-import "https://unpkg.com/xterm@5.3.0/lib/xterm.js";
-import "https://unpkg.com/xterm-pty@0.9.4/index.js";
-import "./arg-module.js";
-import initEmscriptenModule from "./out.js";
+import "./vendor/xterm-pty.js";
 
 const statusEl = document.getElementById("status");
 const barEl = document.getElementById("bar");
-const bootEl = document.getElementById("boot");
-const workspaceEl = document.getElementById("workspace");
-const guestStatusEl = document.getElementById("guest-status");
-
-const xterm = new Terminal({
-  fontFamily: "IBM Plex Mono, ui-monospace, Menlo, monospace",
-  fontSize: 14,
-  theme: { background: "#121417", foreground: "#e7e4dc", cursor: "#d6a15a" },
-});
-xterm.open(document.getElementById("terminal"));
-window.__term = xterm;
 
 const { master, slave } = openpty();
-xterm.loadAddon(master);
+// Browser developer tools can inspect the actual guest console without a
+// separate host shell or an exposed remote command endpoint.
+window.__webIDE = Object.freeze({
+  sendSerial(text) {
+    if (typeof text !== "string") throw new TypeError("Serial input must be text");
+    slave.ldisc.writeFromLower(text);
+  },
+  readSerial: () => window.__guestLog || "",
+});
+const guestLines = [];
+const guestDecoder = new TextDecoder();
+const bootState = window.__webIdeBoot ||= {};
+let pendingGuestLine = "";
 
-const seen = new Set();
-let ready = false;
+bootState.runtimeReady = false;
+bootState.guestReady = false;
+bootState.error = null;
 
-function note(line) {
-  const text = String(line);
-  if (text.includes("WEB_IDE_READY")) guestStatusEl.textContent = "Shell ready";
-  if (text.includes("WEB_IDE_PYTHON ")) guestStatusEl.textContent = text.trim();
-  if (text.includes("WEB_IDE_NODE ")) guestStatusEl.textContent = text.trim();
-  if (text.includes("WEB_IDE_CODE_SERVER_HTTP ")) openIde();
-  if (text.includes("WEB_IDE_CODE_SERVER_HTTP_FAIL")) {
-    guestStatusEl.textContent = "VS Code did not open";
-    const detail = document.getElementById("ide-detail");
-    if (detail) {
-      detail.textContent = "code-server is installed in the guest. This emulator does not get its Node process to listen, so the terminal below stays the working surface.";
-    }
+function inspectGuest(line) {
+  const ready = line.match(/WEB_IDE_CODE_SERVER_HTTP\s+([1-5]\d\d)\b/);
+  if (ready && Number(ready[1]) < 400) {
+    // Keep this independently of the bounded log. A busy console must not
+    // make a guest which has already started appear unready again.
+    bootState.guestReady = true;
+    bootState.httpStatus = Number(ready[1]);
   }
-  if (text.includes("WEB_IDE_DOCKER_UP")) guestStatusEl.textContent = "Docker is running in the guest";
-  if (text.includes("WEB_IDE_DOCKER_DOWN") && !ready) {
-    guestStatusEl.textContent = "Docker daemon did not start";
-  }
-  if (!ready && text.includes("WEB_IDE_READY")) {
-    ready = true;
-    bootEl.hidden = true;
-    workspaceEl.hidden = false;
-    guestStatusEl.textContent = "Starting VS Code";
-    xterm.focus();
-    window.setTimeout(freeGuestCpu, 1500);
-    watchIde();
+  if (line.includes("WEB_IDE_CODE_SERVER_STARTING")) {
+    setProgress("Starting VS Code in the virtual machine", NaN);
   }
 }
 
-function ideOrigin() {
-  const explicit = new URLSearchParams(location.search).get("ide");
-  if (explicit) return explicit.replace(/\/$/, "");
-  const host = location.hostname;
-  if (host === "localhost" || host === "127.0.0.1") {
-    const port = new URLSearchParams(location.search).get("idePort") || "18080";
-    return `${location.protocol}//${host}:${port}`;
+function noteGuest(text) {
+  // PTY writes can end inside a UTF-8 character or a readiness marker.
+  // Preserve both boundaries instead of treating each packet as a line.
+  pendingGuestLine += String(text).replace(/\r/g, "");
+  const lines = pendingGuestLine.split("\n");
+  pendingGuestLine = lines.pop();
+  for (const line of lines) {
+    inspectGuest(line);
+    guestLines.push(line);
+    if (guestLines.length > 240) guestLines.shift();
   }
-  if (host.startsWith("web-ide.")) return `${location.protocol}//ide.${host.slice("web-ide.".length)}`;
-  return `${location.protocol}//ide.${host}`;
+  inspectGuest(pendingGuestLine);
+  pendingGuestLine = pendingGuestLine.slice(-16000);
+  window.__guestLog = [...guestLines, pendingGuestLine].join("\n").slice(-16000);
 }
 
-let ideOpened = false;
-
-function openIde() {
-  if (ideOpened) return;
-  ideOpened = true;
-  const ide = document.getElementById("ide");
-  const wait = document.getElementById("ide-wait");
-  ide.src = `${ideOrigin()}/?folder=/opt/web-ide/demos`;
-  ide.hidden = false;
-  if (wait) wait.hidden = true;
-  guestStatusEl.textContent = "VS Code is open";
-}
-
-function typeIntoGuest(text) {
-  const service = xterm._core && (xterm._core.coreService || xterm._core._coreService);
-  if (service && typeof service.triggerDataEvent === "function") {
-    service.triggerDataEvent(text, true);
-    return;
-  }
-  xterm.paste(text);
-}
-
-function freeGuestCpu() {
-  typeIntoGuest("pkill -x dockerd; pkill -x containerd\r");
-}
-
-async function watchIde() {
-  const deadline = Date.now() + 40 * 60 * 1000;
-  while (!ideOpened && Date.now() < deadline) {
-    try {
-      const response = await fetch("/ide-status", { redirect: "manual", cache: "no-store" });
-      if (response.status >= 200 && response.status < 400) {
-        openIde();
-        return;
-      }
-    } catch {
-      // The guest proxy is down until code-server listens.
-    }
-    await new Promise((resolve) => setTimeout(resolve, 4000));
-  }
-}
-
-const decoder = new TextDecoder();
-const originalWrite = slave.write.bind(slave);
-window.__guestLog = "";
-let pending = "";
-slave.write = (data) => {
-  let chunk = "";
+master.onWrite((packet) => {
+  const bytes = packet[0];
+  const done = packet[1];
   try {
-    if (typeof data === "string") chunk = data;
-    else if (typeof data === "number") chunk = String.fromCharCode(data);
-    else if (Array.isArray(data)) chunk = decoder.decode(Uint8Array.from(data));
-    else if (ArrayBuffer.isView(data)) chunk = decoder.decode(data);
-    else if (data instanceof ArrayBuffer) chunk = decoder.decode(new Uint8Array(data));
-  } catch {
-    chunk = "";
+    noteGuest(guestDecoder.decode(bytes, { stream: true }));
+  } finally {
+    if (typeof done === "function") done();
   }
-  if (chunk) {
-    window.__guestLog = (window.__guestLog + chunk).slice(-6000);
-    pending += chunk;
-    const parts = pending.split("\n");
-    pending = parts.pop() || "";
-    for (const line of parts) {
-      const clean = line.replace(/\r/g, "");
-      if (clean && !seen.has(clean)) {
-        seen.add(clean);
-        note(clean);
-      }
-    }
-  }
-  return originalWrite(data);
-};
+});
 
 function setProgress(label, ratio) {
-  statusEl.textContent = label;
-  if (Number.isFinite(ratio)) {
+  if (bootState.error) {
+    label = "The virtual machine could not start. Reload to try again.";
+    ratio = 0;
+  }
+  if (statusEl) statusEl.textContent = label;
+  if (barEl && Number.isFinite(ratio)) {
     barEl.style.width = `${Math.max(4, Math.min(100, ratio * 100))}%`;
   }
 }
@@ -149,21 +78,39 @@ Module.setStatus = (text) => {
     setProgress(text, Number(match[1]) / Number(match[2]));
     return;
   }
-  setProgress(text || "Preparing the guest", NaN);
+  setProgress(text || "Preparing the virtual machine", NaN);
 };
 
 const guestMac = "02:00:00:00:00:01";
 const socketScheme = location.protocol === "https:" ? "wss:" : "ws:";
-Module.websocket = { url: `${socketScheme}//${location.host}/qemu-net` };
+Module.websocket = { url: `${socketScheme}//${location.host}/sessions/${bootState.session}/net` };
 Module.pty = slave;
-Module.mainScriptUrlOrBlob = `${location.origin}/out.js`;
-Module.locateFile = (path) => `${location.origin}/${path}`;
-Module.print = (text) => note(text);
-Module.printErr = (text) => note(text);
+Module.print = (text) => noteGuest(`${text}\n`);
+Module.printErr = (text) => noteGuest(`${text}\n`);
+Module.onRuntimeInitialized = () => {
+  if (bootState.error) return;
+  bootState.runtimeReady = true;
+  setProgress("Starting Linux in your browser", NaN);
+};
+Module.onAbort = (reason) => {
+  bootState.error = String(reason);
+  setProgress("The virtual machine could not start. Reload to try again.", 0);
+};
 
 const info = `t:${Math.round(Date.now() / 1000)}\nn:${guestMac}\n`;
 
-function start(packInfo) {
+async function start(packInfo) {
+  if (!/^[a-f0-9]{32}$/.test(bootState.session || "")) {
+    throw new Error("Missing guest session");
+  }
+  if (typeof Module.locateFile !== "function") {
+    throw new Error("Missing verified virtual machine assets");
+  }
+  // Keep all generated glue, disk/snapshot data and Wasm on the same
+  // manifest version, including scripts imported by emulator workers.
+  Module.mainScriptUrlOrBlob = Module.locateFile("out.js");
+  await import(Module.locateFile("arg-module.js"));
+  const { default: initEmscriptenModule } = await import(Module.locateFile("out.js"));
   Module.preRun = Module.preRun || [];
   Module.preRun.push((mod) => {
     try {
@@ -173,19 +120,29 @@ function start(packInfo) {
     }
     mod.FS.writeFile("/pack/info", packInfo);
   });
-  initEmscriptenModule(Module).then(() => {
-    const previousPoll = Module.TTY.stream_ops.poll;
-    const pty = Module.pty;
-    Module.TTY.stream_ops.poll = function poll(stream, timeout) {
-      if (!pty.readable) {
-        return (pty.readable ? 1 : 0) | (pty.writable ? 4 : 0);
-      }
-      return previousPoll.call(stream, timeout);
-    };
-  }).catch((error) => {
-    setProgress(`Startup failed: ${error}`, 0);
+  const readableCallbacks = [];
+  slave.onReadable(() => {
+    readableCallbacks.splice(0).forEach((callback) => callback());
   });
+  Module.preRun.push((mod) => {
+    if (!mod.TTY || !mod.TTY.stream_ops) return;
+    mod.TTY.stream_ops.poll = (_stream, _timeout, notifyCallback) => {
+      if (slave.readable) return 5;
+      if (notifyCallback != null) {
+        notifyCallback.registerCleanupFunc(() => {
+          const index = readableCallbacks.indexOf(notifyCallback);
+          if (index !== -1) readableCallbacks.splice(index, 1);
+        });
+        readableCallbacks.push(notifyCallback);
+      }
+      return 4;
+    };
+  });
+  await initEmscriptenModule(Module);
 }
 
-setProgress("Loading the emulator", 0.08);
-start(info);
+setProgress("Loading the virtual machine", 0.08);
+start(info).catch((error) => {
+  bootState.error = String(error);
+  setProgress("The virtual machine could not start. Reload to try again.", 0);
+});

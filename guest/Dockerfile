@@ -58,6 +58,18 @@ RUN curl -fsSL -o /tmp/code-server.tgz \
     && mkdir -p /opt \
     && tar -xzf /tmp/code-server.tgz -C /opt \
     && ln -sf "/opt/code-server-${CODE_SERVER_VERSION}-linux-amd64/bin/code-server" /usr/local/bin/code-server \
+    && sed -i 's/timeoutInterval = 10000/timeoutInterval = 600000/' \
+        "/opt/code-server-${CODE_SERVER_VERSION}-linux-amd64/out/node/wrapper.js" \
+    && wb="/opt/code-server-${CODE_SERVER_VERSION}-linux-amd64/lib/vscode/out/vs/code/browser/workbench/workbench.js" \
+    && sed -i \
+        -e 's/var zK=-32e3,Pet=5e3,tGn=2e4;/var zK=-32e3,Pet=2e4,tGn=12e4;/' \
+        -e 's/if(e>=2e4\&\&t>=2e4\&\&i>=2e4\&\&!this._loadEstimator.hasHighLoad())/if(e>=12e4\&\&t>=12e4\&\&i>=12e4\&\&!this._loadEstimator.hasHighLoad())/' \
+        -e 's/let n=Math.max(2e4-e,2e4-t,2e4-i,500);this._outgoingAckTimeout/let n=Math.max(12e4-e,12e4-t,12e4-i,500);this._outgoingAckTimeout/' \
+        -e 's/if(e>=2e4\&\&t>=2e4\&\&!this._loadEstimator.hasHighLoad()){this._lastSocketTimeoutTime=o;/if(e>=12e4\&\&t>=12e4\&\&!this._loadEstimator.hasHighLoad()){this._lastSocketTimeoutTime=o;/' \
+        -e 's/zCs(t,r9n(1e4))/zCs(t,r9n(18e4))/' \
+        -e 's/},6e4),v=c.onMessage(b=>{if(klt(b,1))/},3e5),v=c.onMessage(b=>{if(klt(b,1))/' \
+        -e 's/var Wcs=15e3,gTi=3e4,/var Wcs=18e4,gTi=9e4,/' \
+        "$wb" \
     && rm -f /tmp/code-server.tgz
 
 RUN curl -fsSL -o /tmp/docker.tgz \
@@ -68,8 +80,8 @@ RUN curl -fsSL -o /tmp/docker.tgz \
 COPY demos /opt/web-ide/demos
 COPY web-ide-init.sh /usr/local/bin/web-ide-init
 RUN chmod 755 /usr/local/bin/web-ide-init /opt/web-ide/demos/run-all.sh \
-    && printf '%s\n' '. /root/.asdf/asdf.sh' 'cd /opt/web-ide/demos' > /root/.bashrc \
-    && printf '%s\n' '. /root/.asdf/asdf.sh' > /root/.profile
+    && printf '%s\n' 'export PATH=/root/.asdf/installs/python/3.12.7/bin:/root/.asdf/installs/nodejs/20.19.5/bin:/root/.asdf/installs/hugo/0.168.0/bin:/usr/local/bin:/usr/bin:/bin' 'cd /opt/web-ide/demos' > /root/.bashrc \
+    && cp /root/.bashrc /root/.profile
 
 WORKDIR /opt/web-ide/demos
 ENTRYPOINT ["/usr/local/bin/web-ide-init"]

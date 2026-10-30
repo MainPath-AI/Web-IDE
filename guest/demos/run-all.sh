@@ -1,5 +1,5 @@
 #!/bin/bash
-set -u
+set -euo pipefail
 cd "$(dirname "$0")"
 echo "--- python ---"
 python python/hello.py

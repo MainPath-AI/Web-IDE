@@ -1,5 +1,6 @@
 .tools/
 dist/
+nginx/editor-static/
 *.log
 scripts/github-*.mjs
 scripts/probe.mjs

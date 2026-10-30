@@ -1,0 +1,2 @@
+# Unified-diff context preserves upstream blank lines and tab indentation.
+patches/container2wasm/*.patch -whitespace

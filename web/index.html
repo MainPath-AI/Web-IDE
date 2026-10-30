@@ -9,57 +9,146 @@
   <body>
     <div id="boot">
       <p class="mark">Web-IDE</p>
-      <p id="status">Loading VS Code</p>
+      <p id="status">Loading the virtual machine</p>
       <div class="track" aria-hidden="true"><div id="bar"></div></div>
     </div>
     <iframe id="ide" title="VS Code" hidden></iframe>
     <script>
+      var Module = {};
+      window.__webIdeBoot = { runtimeReady: false, guestReady: false, error: null, session: null };
+    </script>
+    <script>
       const statusEl = document.getElementById("status");
-      const barEl = document.getElementById("bar");
       const bootEl = document.getElementById("boot");
       const ideEl = document.getElementById("ide");
-      const started = Date.now();
-      let progress = 12;
 
-      const ticker = window.setInterval(() => {
-        progress = Math.min(progress + 4 + Math.random() * 7, 90);
-        barEl.style.width = progress + "%";
-      }, 180);
+      function newSessionToken() {
+        const bytes = crypto.getRandomValues(new Uint8Array(16));
+        return Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join("");
+      }
+
+      function configureAssets(manifest) {
+        if (!manifest || typeof manifest.files !== "object" || manifest.files === null || Array.isArray(manifest.files)) {
+          throw new Error("Missing virtual machine file manifest");
+        }
+        const assets = new Map();
+        for (const [name, file] of Object.entries(manifest.files)) {
+          if (!/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(name) || !file ||
+              !/^[a-f0-9]{64}$/.test(file.sha256 || "") || !Number.isSafeInteger(file.bytes) || file.bytes <= 0) {
+            throw new Error(`Invalid virtual machine asset: ${name}`);
+          }
+          assets.set(name, file.sha256);
+        }
+        for (const name of ["load.js", "arg-module.js", "out.js", "qemu-system-x86_64.wasm", "qemu-system-x86_64.data"]) {
+          if (!assets.has(name)) throw new Error(`Missing virtual machine asset: ${name}`);
+        }
+        Module.locateFile = (name) => {
+          const hash = assets.get(name);
+          if (!hash) throw new Error(`Unlisted virtual machine asset: ${name}`);
+          return `${location.origin}/${name}?v=${hash}`;
+        };
+        const state = window.__webIdeBoot;
+        state.assetVersion = assets.get("load.js");
+        // Emscripten's generated data loader rejects its download promise
+        // outside the module initializer. Surface a failed/mismatched data
+        // package immediately instead of leaving the loading screen waiting.
+        const assetURLs = Array.from(assets.keys(), (name) => Module.locateFile(name));
+        if (state.assetErrorHandler) window.removeEventListener("unhandledrejection", state.assetErrorHandler);
+        state.assetErrorHandler = (event) => {
+          const message = String(event.reason);
+          if (!assetURLs.some((url) => message.includes(url))) return;
+          state.error = message;
+          statusEl.textContent = "The virtual machine files changed or could not load. Reload to try again.";
+          event.preventDefault();
+        };
+        window.addEventListener("unhandledrejection", state.assetErrorHandler);
+      }
 
       function editorOrigin() {
         const host = location.hostname;
+        if (host === "localhost" || host === "127.0.0.1") {
+          return location.protocol + "//" + host + ":18080";
+        }
         if (host.startsWith("web-ide.")) {
           return location.protocol + "//ide." + host.slice("web-ide.".length);
         }
-        return location.protocol + "//" + host + ":18080";
+        return location.protocol + "//ide." + host;
       }
 
       async function editorReady() {
-        const response = await fetch("/ide-health", { redirect: "manual", cache: "no-store" });
-        if (response.type === "opaqueredirect") return true;
-        return response.status >= 200 && response.status < 400;
+        const state = window.__webIdeBoot;
+        if (state.error || !state.runtimeReady) return false;
+        // A restored VM may already have printed its startup marker before
+        // the snapshot. Check the actual server after the emulator starts.
+        const response = await fetch(`/sessions/${state.session}/health`, {
+          redirect: "manual",
+          cache: "no-store",
+          signal: AbortSignal.timeout(15000),
+        });
+        const ready = response.type === "opaqueredirect" || (response.status >= 200 && response.status < 400);
+        if (ready) state.guestReady = true;
+        return ready;
       }
 
       async function openEditor() {
-        while (true) {
+        const deadline = Date.now() + 45 * 60 * 1000;
+        while (Date.now() < deadline) {
+          if (window.__webIdeBoot.error) return;
           try {
-            if (await editorReady()) break;
+            if (await editorReady()) {
+              statusEl.textContent = "Opening VS Code";
+              document.getElementById("bar").style.width = "100%";
+              ideEl.src = editorOrigin() + `/sessions/${window.__webIdeBoot.session}/editor/?folder=/opt/web-ide/demos`;
+              ideEl.hidden = false;
+              bootEl.hidden = true;
+              return;
+            }
           } catch (error) {
-            statusEl.textContent = "Waiting for VS Code";
+            if (window.__webIdeBoot.error) return;
+            statusEl.textContent = "Waiting for VS Code in the virtual machine";
           }
-          await new Promise((resolve) => window.setTimeout(resolve, 400));
+          await new Promise((resolve) => window.setTimeout(resolve, 5000));
         }
-        const remain = 1400 - (Date.now() - started);
-        if (remain > 0) await new Promise((resolve) => window.setTimeout(resolve, remain));
-        window.clearInterval(ticker);
-        barEl.style.width = "100%";
-        statusEl.textContent = "Opening VS Code";
-        ideEl.src = editorOrigin() + "/?folder=/home/coder/project";
-        ideEl.hidden = false;
-        bootEl.hidden = true;
+        statusEl.textContent = "VS Code did not start inside the virtual machine.";
       }
 
-      openEditor();
+      function loadScript(src, type) {
+        return new Promise((resolve, reject) => {
+          const script = document.createElement("script");
+          script.src = src;
+          if (type) script.type = type;
+          script.onload = resolve;
+          script.onerror = () => reject(new Error(`Could not load ${src}`));
+          document.body.appendChild(script);
+        });
+      }
+
+      async function startVirtualMachine() {
+        let phase = "manifest";
+        try {
+          const state = window.__webIdeBoot;
+          state.session ||= newSessionToken();
+          const response = await fetch("/asset-manifest.json", { cache: "no-store", signal: AbortSignal.timeout(15000) });
+          if (!response.ok) throw new Error("Could not load the virtual machine version manifest");
+          configureAssets(await response.json());
+          phase = "loader";
+          // load.js installs the data-pack preRun callbacks used by boot.js.
+          await loadScript(Module.locateFile("load.js"));
+          await loadScript(`/boot.js?v=${state.assetVersion}`, "module");
+          await openEditor();
+        } catch (error) {
+          window.__webIdeBoot.error = String(error);
+          statusEl.textContent = phase === "manifest"
+            ? "The virtual machine version could not be verified. Reload to try again."
+            : "The virtual machine could not load. Reload to try again.";
+        }
+      }
+
+      if (!window.crossOriginIsolated) {
+        statusEl.textContent = "Open this page over HTTPS. The virtual machine needs cross-origin isolation.";
+      } else {
+        startVirtualMachine();
+      }
     </script>
   </body>
 </html>

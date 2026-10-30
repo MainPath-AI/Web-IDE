@@ -1,0 +1,105 @@
+name: Browser image
+
+on:
+  workflow_dispatch:
+    inputs:
+      publish:
+        description: Push the tested image to mainpath/web-ide; browser acceptance is separate
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: browser-image-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  image:
+    runs-on: ${{ vars.WEB_IDE_BUILD_RUNNER || 'ubuntu-latest' }}
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - name: Check full-build runner resources
+        env:
+          MIN_FREE_GIB: ${{ vars.WEB_IDE_MIN_FREE_GIB || '30' }}
+        run: |
+          df -h "$GITHUB_WORKSPACE"
+          free -h
+          [[ "$MIN_FREE_GIB" =~ ^[1-9][0-9]*$ ]] || { echo "Invalid WEB_IDE_MIN_FREE_GIB" >&2; exit 1; }
+          available_kib="$(df -Pk "$GITHUB_WORKSPACE" | awk 'NR == 2 { print $4 }')"
+          if (( available_kib < MIN_FREE_GIB * 1024 * 1024 )); then
+            echo "::error::Full browser builds require at least ${MIN_FREE_GIB} GiB free for this preflight. Select a sufficiently provisioned WEB_IDE_BUILD_RUNNER; no shared Docker data will be pruned."
+            exit 1
+          fi
+      - name: Prepare the pinned module and patches
+        id: toolchain
+        run: |
+          assets="$(python3 scripts/prepare-build.py)"
+          printf 'path=%s\n' "$assets" >> "$GITHUB_OUTPUT"
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.25.x'
+          cache-dependency-path: ${{ steps.toolchain.outputs.path }}/go.sum
+      - uses: docker/setup-buildx-action@v3
+        with:
+          driver: docker
+      - name: Check startup, protocol, and snapshot regressions
+        run: |
+          node --test scripts/*.test.mjs
+          python3 -m unittest discover -s scripts/tests -v
+          for script in scripts/build.sh scripts/run.sh guest/web-ide-init.sh; do
+            bash -n "$script"
+          done
+          sh -n nginx/entrypoint.sh
+          git diff --check
+      - name: Test snapshot and isolated session bridge in the pinned module
+        env:
+          ASSETS: ${{ steps.toolchain.outputs.path }}
+        run: |
+          cd "$ASSETS"
+          go test ./cmd/get-qemu-state
+          go test ./cmd/init/web-ide-clock.go ./cmd/init/web-ide-clock_test.go
+          go test -race "$GITHUB_WORKSPACE/nginx/bridge/main.go" "$GITHUB_WORKSPACE/nginx/bridge/main_test.go"
+      - name: Build the complete browser image
+        env:
+          WEB_IDE_IMAGE: mainpath/web-ide:${{ github.sha }}
+          WEB_IDE_PLATFORM: linux/amd64
+        run: bash scripts/build.sh
+      - name: Validate Nginx and record immutable image details
+        env:
+          IMAGE: mainpath/web-ide:${{ github.sha }}
+          ASSETS: ${{ steps.toolchain.outputs.path }}
+        run: |
+          test "$(docker image inspect "$IMAGE" --format '{{.Os}}/{{.Architecture}}')" = linux/amd64
+          docker run --rm --platform linux/amd64 --entrypoint nginx "$IMAGE" -t
+          mkdir -p provenance
+          docker image inspect "$IMAGE" --format '{{.Id}}' > provenance/image-id.txt
+          container="web-ide-provenance-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          docker create --name "$container" "$IMAGE" >/dev/null
+          trap 'docker rm "$container" >/dev/null' EXIT
+          docker cp "$container:/usr/share/nginx/html/asset-manifest.json" provenance/asset-manifest.json
+          docker cp "$container:/usr/share/nginx/html/asset-versions.conf" provenance/asset-versions.conf
+          cp "$ASSETS/web-ide-source.json" provenance/web-ide-source.json
+          printf '%s\n' 'Package, architecture and Nginx checks passed; browser acceptance and deployment were not performed by this workflow.' > provenance/verification-scope.txt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: browser-image-provenance
+          path: provenance/
+          if-no-files-found: error
+      - name: Sign in to Docker Hub
+        if: inputs.publish && github.ref == 'refs/heads/main'
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+      - name: Publish the exact built image
+        if: inputs.publish && github.ref == 'refs/heads/main'
+        run: |
+          docker tag mainpath/web-ide:${{ github.sha }} mainpath/web-ide:latest
+          docker push mainpath/web-ide:${{ github.sha }}
+          docker push mainpath/web-ide:latest

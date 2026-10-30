@@ -1,0 +1,105 @@
+--- a/Dockerfile
++++ b/Dockerfile
+@@ -739,7 +739,8 @@
+ WORKDIR /work
+ RUN --mount=type=cache,target=/root/.cache/go-build \
+     --mount=type=cache,target=/go/pkg/mod \
+-    go build -o /out/get-qemu-state ./cmd/get-qemu-state
++    go build -o /out/get-qemu-state ./cmd/get-qemu-state && \
++    CGO_ENABLED=0 go build -o /out/c2w-net ./cmd/c2w-net
+ 
+ FROM ubuntu:22.04 AS qemu-config-dev-amd64
+ ARG LINUX_LOGLEVEL
+@@ -813,11 +814,28 @@
+ RUN cp /qemu/pc-bios/efi-virtio.rom /pack/
+ 
+ COPY --link --from=get-qemu-state-dev /out/get-qemu-state /get-qemu-state
++COPY --link --from=get-qemu-state-dev /out/c2w-net /c2w-net
++COPY --link --from=rootfs-amd64-dev /rootfs/oci/rootfs/opt/code-server-*-linux-amd64/lib/node /usr/local/bin/node
++COPY --link --from=assets /web-ide/warm-guest.mjs /warm-guest.mjs
+ COPY --link --from=qemu-config-dev-amd64 /out/args-before-cp.json /
+ RUN mkdir -p /tmp/wasi0 /tmp/wasi1
+ WORKDIR /qemu/build/
+ ARG QEMU_MIGRATION
+-RUN if test "${QEMU_MIGRATION}" = "true"  ; then /get-qemu-state -output=/pack/vm.state --args-json=/args-before-cp.json ./qemu-system-x86_64 ; fi
++# The network and editor must be running when their guest RAM is captured.
++# All preparation stays in the foreground; only the network relay is backgrounded.
++RUN set -eu; if test "${QEMU_MIGRATION}" = "true"; then \
++      printf 't:1\nn:02:00:00:00:00:01\n' > /tmp/wasi1/info; \
++      sed -i 's/connect=127.0.0.1:8888/listen=:8888/' /args-before-cp.json; \
++      ( i=0; while [ "$i" -lt 240 ]; do \
++          /c2w-net -p 18081:8080 127.0.0.1:8888 && exit 0; \
++          i=$((i+1)); sleep 1; \
++        done; exit 1 ) & \
++      network_pid=$!; \
++      trap 'kill "$network_pid" 2>/dev/null || true' EXIT; \
++      /get-qemu-state -output=/pack/vm.state --args-json=/args-before-cp.json \
++        -warm-command='["/usr/local/bin/node","/warm-guest.mjs","http://127.0.0.1:18081/","--timeout-ms","120000"]' \
++        ./qemu-system-x86_64; \
++    fi
+ 
+ FROM qemu-native-dev AS qemu-aarch64-pack
+ WORKDIR /qemu/build/
+--- a/cmd/init/main.go
++++ b/cmd/init/main.go
+@@ -194,6 +194,17 @@
+ 		}
+ 		log.Printf("INFO:\n%s\n", string(infoD))
+ 		info = parseInfo(infoD)
++		// Web-IDE keeps its files in the guest's virtio disk. The two temporary
++		// 9p exports are only needed to read boot info; mounted VirtFS devices
++		// block QEMU migration and must be detached before warming the editor.
++		if len(info.mounts) != 0 {
++			return fmt.Errorf("Web-IDE snapshots do not support host filesystem mounts")
++		}
++		for _, tag := range []string{rootFSTag, packFSTag} {
++			if err := syscall.Unmount(filepath.Join("/mnt", tag), 0); err != nil {
++				return fmt.Errorf("unmounting temporary %s export: %w", tag, err)
++			}
++		}
+ 	}
+ 
+ 	if info.withNet {
+@@ -208,15 +219,26 @@
+ 		if o, err := exec.Command("ip", "link", "set", "dev", "eth0", "up").CombinedOutput(); err != nil {
+ 			return fmt.Errorf("failed eth0 up: %v: %w", string(o), err)
+ 		}
+-		if o, err := exec.Command("udhcpc", "-i", "eth0").CombinedOutput(); err != nil {
+-			return fmt.Errorf("failed udhcpc: %w", err)
+-		} else if cfg.Debug {
+-			o2, _ := exec.Command("ip", "a").CombinedOutput()
+-			log.Printf("finished udhcpc: %s\n %s\n", string(o), string(o2))
++		var dhcpErr error
++		for attempt := 0; attempt < 30; attempt++ {
++			if _, err := exec.Command("udhcpc", "-i", "eth0", "-n", "-t", "2", "-T", "1").CombinedOutput(); err != nil {
++				dhcpErr = err
++				time.Sleep(time.Second)
++				continue
++			}
++			dhcpErr = nil
++			break
++		}
++		if dhcpErr != nil {
++			return fmt.Errorf("failed udhcpc: %w", dhcpErr)
+ 		}
+ 	}
+ 	if o, err := exec.Command("ip", "link", "set", "dev", "lo", "up").CombinedOutput(); err != nil {
+ 		return fmt.Errorf("failed lo up: %v: %w", string(o), err)
+ 	}
+ 
++	if info.withNet {
++		startWebIDEClockSync()
++	}
++
+ 	if externalBundle {
+--- a/config/qemu/linux_x86_config
++++ b/config/qemu/linux_x86_config
+@@ -227,7 +227,7 @@
+ CONFIG_EVENTFD=y
+ CONFIG_SHMEM=y
+ CONFIG_AIO=y
+-CONFIG_IO_URING=y
++# CONFIG_IO_URING is not set
+ CONFIG_ADVISE_SYSCALLS=y
+ CONFIG_MEMBARRIER=y
+ # CONFIG_KALLSYMS is not set

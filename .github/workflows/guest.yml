@@ -3,10 +3,50 @@ name: Guest
 on:
   push:
     branches: [main]
+  pull_request:
   workflow_dispatch:
 
+permissions:
+  contents: read
+
 jobs:
+  regression:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - name: Prepare the pinned module and patches
+        id: toolchain
+        run: |
+          assets="$(python3 scripts/prepare-build.py)"
+          printf 'path=%s\n' "$assets" >> "$GITHUB_OUTPUT"
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.25.x'
+          cache-dependency-path: ${{ steps.toolchain.outputs.path }}/go.sum
+      - name: Check startup and package regressions
+        run: |
+          node --test scripts/*.test.mjs
+          python3 -m unittest discover -s scripts/tests -v
+          for script in scripts/build.sh scripts/run.sh guest/web-ide-init.sh; do
+            bash -n "$script"
+          done
+          sh -n nginx/entrypoint.sh
+          git diff --check
+      - name: Test snapshot and isolated session bridge in the pinned module
+        env:
+          ASSETS: ${{ steps.toolchain.outputs.path }}
+        run: |
+          cd "$ASSETS"
+          go test ./cmd/get-qemu-state
+          go test ./cmd/init/web-ide-clock.go ./cmd/init/web-ide-clock_test.go
+          go test -race "$GITHUB_WORKSPACE/nginx/bridge/main.go" "$GITHUB_WORKSPACE/nginx/bridge/main_test.go"
+
   smoke:
+    needs: regression
     runs-on: ubuntu-latest
     timeout-minutes: 45
     steps:
@@ -22,9 +62,15 @@ jobs:
             . /root/.asdf/asdf.sh
             test "$(uname -m)" = x86_64
             python -c "import platform; assert platform.machine()==\"x86_64\""
-            node -e "if (process.arch !== \"x64\") process.exit(1)"
-            hugo version
+            python -c "import platform; assert platform.python_version()==\"3.12.7\""
+            node -e "if (process.arch !== \"x64\" || process.version !== \"v20.19.5\") process.exit(1)"
+            hugo version | grep "v0.168.0"
             code-server --version
             command -v dockerd
-            test -x /opt/web-ide/demos/run-all.sh
+            asdf plugin list | grep python
+            asdf plugin list | grep nodejs
+            asdf plugin list | grep hugo
+            cd /opt/web-ide/demos
+            ./run-all.sh
+            test -s hugo/public/index.html
           '

@@ -29,7 +29,6 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 RUN update-alternatives --set iptables /usr/sbin/iptables-legacy \
     && update-alternatives --set ip6tables /usr/sbin/ip6tables-legacy
-COPY --from=workspace /web-ide-workspace /usr/local/bin/web-ide-workspace
 
 ARG NODE_VERSION=20.19.5
 ARG HUGO_VERSION=0.168.0
@@ -88,6 +87,9 @@ RUN curl -fsSL -o /tmp/docker.tgz \
     && tar -xzf /tmp/docker.tgz -C /usr/local/bin --strip-components=1 \
     && rm -f /tmp/docker.tgz
 
+COPY --from=workspace /web-ide-workspace /usr/local/bin/web-ide-workspace
+COPY node-cache.cjs /usr/local/lib/web-ide-node-cache.cjs
+COPY warm-node-cache.cjs /usr/local/bin/web-ide-warm-cache.cjs
 COPY demos /opt/web-ide/demos
 COPY docker-start.sh /usr/local/bin/web-ide-docker
 COPY web-ide-init.sh /usr/local/bin/web-ide-init

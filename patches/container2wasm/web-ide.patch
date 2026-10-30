@@ -1,5 +1,24 @@
 --- a/Dockerfile
 +++ b/Dockerfile
+@@ -376,6 +376,15 @@
+ ARG ZLIB_VERSION
+ RUN mkdir -p /zlib
+-RUN curl -LsS https://zlib.net/fossils/zlib-$ZLIB_VERSION.tar.gz | tar zxC /zlib --strip-components=1
++# The current release is not reliably available in fossils. Fail on HTTP
++# errors, retry transfers, and verify the official release hash before tar.
++RUN set -eu; test "$ZLIB_VERSION" = 1.3.2; \
++    for base in https://zlib.net https://zlib.net/fossils https://github.com/madler/zlib/releases/download/v1.3.2; do \
++      if curl -fLsS --retry 3 --retry-all-errors --connect-timeout 15 --max-time 120 \
++          -o /tmp/zlib.tar.gz "$base/zlib-$ZLIB_VERSION.tar.gz" && \
++          echo 'bb329a0a2cd0274d05519d61c667c062e06990d72e125ee2dfa8de64f0119d16  /tmp/zlib.tar.gz' | sha256sum -c -; then \
++        tar zxf /tmp/zlib.tar.gz -C /zlib --strip-components=1; rm /tmp/zlib.tar.gz; exit 0; \
++      fi; \
++    done; exit 1
+ WORKDIR /zlib
+ RUN emconfigure ./configure --prefix=$TARGET --static
+ RUN make install
+--- a/Dockerfile
++++ b/Dockerfile
 @@ -739,7 +739,8 @@
  WORKDIR /work
  RUN --mount=type=cache,target=/root/.cache/go-build \

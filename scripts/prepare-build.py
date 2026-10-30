@@ -79,7 +79,7 @@ def prepare():
                 tar.extract(member, stage, **options)
         if archive.wait() != 0:
             raise RuntimeError("git archive failed")
-        subprocess.run(["patch", "--batch", "--forward", "-p1", "-i", str(PATCHES / "web-ide.patch")], cwd=stage, check=True, stdout=sys.stderr)
+        subprocess.run(["patch", "--batch", "--forward", "--fuzz=0", "-p1", "-i", str(PATCHES / "web-ide.patch")], cwd=stage, check=True, stdout=sys.stderr)
         shutil.copyfile(PATCHES / "get-qemu-state.go", stage / "cmd/get-qemu-state/main.go")
         shutil.copyfile(PATCHES / "get-qemu-state_test.go", stage / "cmd/get-qemu-state/main_test.go")
         shutil.copyfile(PATCHES / "web-ide-clock.go", stage / "cmd/init/web-ide-clock.go")

@@ -20,7 +20,8 @@ export PATH=/root/.asdf/installs/python/3.12.7/bin:/root/.asdf/installs/nodejs/2
 export VSCODE_CLI=1
 # V8's optimizing compilers compete for the VM's single emulated CPU. Keep
 # the server's background compilation pool small; tools retain their defaults.
-code_server_node_options="--jitless --v8-pool-size=1"
+code_server_node_options="--jitless --v8-pool-size=1 --require=/usr/local/lib/web-ide-node-cache.cjs"
+code_server_compile_cache=/opt/web-ide/node-cache
 printf '%s\n' \
   "export PATH=${PATH}" \
   'cd /opt/web-ide/demos' > /root/.bashrc
@@ -35,7 +36,7 @@ cat > /root/.local/share/code-server/User/settings.json <<'SETTINGS'
   "extensions.autoCheckUpdates": false,
   "extensions.autoUpdate": false,
   "terminal.integrated.shellIntegration.enabled": false,
-  "terminal.integrated.env.linux": { "NODE_OPTIONS": null },
+  "terminal.integrated.env.linux": { "NODE_OPTIONS": null, "NODE_COMPILE_CACHE": null },
   "terminal.integrated.defaultProfile.linux": "bash",
   "terminal.integrated.profiles.linux": {
     "bash": { "path": "/bin/bash", "args": ["--noprofile", "--norc"] }
@@ -60,7 +61,9 @@ log_file=/var/log/code-server.log
 tail -n +1 -F --sleep-interval=1 "${log_file}" | sed -u 's/^/WEB_IDE_CODE_SERVER_LOG /' &
 
 if [ -x "${code_root}/lib/node" ]; then
-  NODE_OPTIONS="${code_server_node_options}" "${code_root}/lib/node" "${code_root}" \
+  NODE_OPTIONS="${code_server_node_options}" NODE_COMPILE_CACHE="${code_server_compile_cache}" \
+    "${code_root}/lib/node" /usr/local/bin/web-ide-warm-cache.cjs "${code_root}" || exit 1
+  NODE_OPTIONS="${code_server_node_options}" NODE_COMPILE_CACHE="${code_server_compile_cache}" "${code_root}/lib/node" "${code_root}" \
     --auth none \
     --bind-addr 0.0.0.0:8080 \
     --disable-telemetry \

@@ -105,7 +105,14 @@
  # CONFIG_KALLSYMS is not set
 --- a/cmd/create-spec/main.go
 +++ b/cmd/create-spec/main.go
-@@ -327,6 +327,10 @@
+@@ -18,5 +18,6 @@
+ 	ctdnamespaces "github.com/containerd/containerd/namespaces"
+ 	ctdoci "github.com/containerd/containerd/oci"
++	ctdcap "github.com/containerd/containerd/pkg/cap"
+ 	"github.com/containerd/platforms"
+ 	inittype "github.com/ktock/container2wasm/cmd/init/types"
+ 	"github.com/moby/sys/user"
+@@ -327,6 +328,13 @@
  		ctdoci.WithEnv(ic.Env),
  		ctdoci.WithTTY,           // TODO: make it configurable
  		ctdoci.WithNewPrivileges, // TODO: make it configurable
@@ -113,6 +120,9 @@
 +		// host. Nested Docker needs the guest kernel's mount/network rights.
 +		ctdoci.WithPrivileged,
 +		ctdoci.WithAllDevicesAllowed,
++		// WithPrivileged inherits the build container's effective caps.
++		// Specify the guest kernel's full set instead of that host limit.
++		ctdoci.WithCapabilities(ctdcap.Known()),
  	)
  	if err != nil {
  		return nil, fmt.Errorf("failed to generate spec: %w", err)

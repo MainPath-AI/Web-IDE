@@ -84,6 +84,7 @@ def prepare():
         shutil.copyfile(PATCHES / "get-qemu-state_test.go", stage / "cmd/get-qemu-state/main_test.go")
         shutil.copyfile(PATCHES / "web-ide-clock.go", stage / "cmd/init/web-ide-clock.go")
         shutil.copyfile(PATCHES / "web-ide-clock_test.go", stage / "cmd/init/web-ide-clock_test.go")
+        shutil.copyfile(PATCHES / "web-ide-spec_test.go", stage / "cmd/create-spec/web-ide-spec_test.go")
         (stage / "web-ide").mkdir()
         shutil.copyfile(ROOT / "scripts/warm-guest.mjs", stage / "web-ide/warm-guest.mjs")
         manifest = {"upstream": UPSTREAM, "revision": REVISION, "patches": inputs, "files": file_hashes(stage)}

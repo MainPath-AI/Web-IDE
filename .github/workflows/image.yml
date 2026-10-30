@@ -63,6 +63,7 @@ jobs:
         run: |
           cd "$ASSETS"
           go test ./cmd/get-qemu-state
+          go test ./cmd/create-spec
           go test ./cmd/init/web-ide-clock.go ./cmd/init/web-ide-clock_test.go
           go test -race "$GITHUB_WORKSPACE/nginx/bridge/main.go" "$GITHUB_WORKSPACE/nginx/bridge/main_test.go"
       - name: Build the complete browser image

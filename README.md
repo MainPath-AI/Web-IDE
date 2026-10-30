@@ -133,6 +133,7 @@ repo="$PWD"
 (
   cd "$assets"
   go test ./cmd/get-qemu-state
+  go test ./cmd/create-spec
   go test ./cmd/init/web-ide-clock.go ./cmd/init/web-ide-clock_test.go
   go test -race "$repo/nginx/bridge/main.go" "$repo/nginx/bridge/main_test.go"
 )

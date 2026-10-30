@@ -18,9 +18,9 @@ export PATH=/root/.asdf/installs/python/3.12.7/bin:/root/.asdf/installs/nodejs/2
 # CLI marker skips its additional interactive shell + Node environment probe,
 # including the probes requested later by the extension and PTY hosts.
 export VSCODE_CLI=1
-# V8's optimizing compilers compete for the VM's single emulated CPU. Keep
-# the server's background compilation pool small; tools retain their defaults.
-code_server_node_options="--jitless --v8-pool-size=1 --require=/usr/local/lib/web-ide-node-cache.cjs"
+# Keep background compilation on the single emulated CPU bounded. Retain
+# V8's JIT: interpreting JavaScript inside the CPU interpreter is too costly.
+code_server_node_options="--v8-pool-size=1 --require=/usr/local/lib/web-ide-node-cache.cjs"
 code_server_compile_cache=/opt/web-ide/node-cache
 printf '%s\n' \
   "export PATH=${PATH}" \
@@ -44,6 +44,7 @@ cat > /root/.local/share/code-server/User/settings.json <<'SETTINGS'
 }
 SETTINGS
 
+/usr/local/bin/web-ide-workspace --check || exit 1
 /usr/local/bin/web-ide-workspace >/var/log/workspace.log 2>&1 &
 
 code_root="$(echo /opt/code-server-*-linux-amd64)"

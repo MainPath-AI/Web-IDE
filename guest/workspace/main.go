@@ -122,6 +122,10 @@ func unpack(reader io.Reader, stage string) error {
 	if err != nil {
 		return err
 	}
+	return unpackData(data, stage)
+}
+
+func unpackData(data []byte, stage string) error {
 	if len(data) < 1024 || len(data) > maxArchive || len(data)%512 != 0 || !bytes.Equal(data[len(data)-1024:], make([]byte, 1024)) {
 		return errors.New("incomplete workspace archive")
 	}
@@ -185,42 +189,76 @@ func unpack(reader io.Reader, stage string) error {
 }
 
 func (w *workspace) restore(reader io.Reader) error {
+	data, err := io.ReadAll(io.LimitReader(reader, maxArchive+1))
+	if err != nil {
+		return err
+	}
 	stage, err := os.MkdirTemp(filepath.Dir(w.root), ".workspace-restore-")
 	if err != nil {
 		return err
 	}
 	defer os.RemoveAll(stage)
-	if err := unpack(reader, stage); err != nil {
+	if err := unpackData(data, stage); err != nil {
 		return err
 	}
-	// Preserve the root inode: code-server's working directory is already here.
+	// Validate the entire archive before touching the live tree. Release the
+	// validation copy before extracting again to keep the guest's RAM bounded.
+	if err := os.RemoveAll(stage); err != nil {
+		return err
+	}
+	previous, _, err := w.archive()
+	if err != nil {
+		return err
+	}
 	old, err := os.MkdirTemp(filepath.Dir(w.root), ".workspace-previous-")
 	if err != nil {
 		return err
 	}
-	defer os.RemoveAll(old)
-	move := func(from, to string) error {
-		entries, err := os.ReadDir(from)
+	preserveOld := false
+	defer func() {
+		if !preserveOld {
+			_ = os.RemoveAll(old)
+		}
+	}()
+	if err := unpackData(previous, old); err != nil {
+		return err
+	}
+	preserveOld = true
+	rollback := func(cause error) error {
+		err := removeContents(w.root)
+		if err == nil {
+			err = unpackData(previous, w.root)
+		}
 		if err != nil {
+			return fmt.Errorf("restore failed; previous files retained in %s: %w", old, errors.Join(cause, err))
+		}
+		preserveOld = false
+		return cause
+	}
+	// Lower-layer OverlayFS directories cannot be renamed (EXDEV). Copy the
+	// validated archive instead, retaining a complete recovery tree throughout.
+	// Keep the root inode because code-server's working directory is here.
+	if err := removeContents(w.root); err != nil {
+		return rollback(err)
+	}
+	if err := unpackData(data, w.root); err != nil {
+		return rollback(err)
+	}
+	preserveOld = false
+	w.revision.Add(1)
+	return nil
+}
+
+func removeContents(root string) error {
+	entries, err := os.ReadDir(root)
+	if err != nil {
+		return err
+	}
+	for _, entry := range entries {
+		if err := os.RemoveAll(filepath.Join(root, entry.Name())); err != nil {
 			return err
 		}
-		for _, entry := range entries {
-			if err := os.Rename(filepath.Join(from, entry.Name()), filepath.Join(to, entry.Name())); err != nil {
-				return err
-			}
-		}
-		return nil
 	}
-	if err := move(w.root, old); err != nil {
-		_ = move(old, w.root)
-		return err
-	}
-	if err := move(stage, w.root); err != nil {
-		_ = move(w.root, stage)
-		_ = move(old, w.root)
-		return err
-	}
-	w.revision.Add(1)
 	return nil
 }
 
@@ -274,6 +312,20 @@ func (w *workspace) ServeHTTP(response http.ResponseWriter, request *http.Reques
 func main() {
 	w := &workspace{root: "/opt/web-ide/demos"}
 	w.revision.Store(1)
+	if len(os.Args) == 2 && os.Args[1] == "--check" {
+		data, _, err := w.archive()
+		if err != nil {
+			log.Fatal("workspace self-test could not create an archive")
+		}
+		if err := w.restore(bytes.NewReader(data)); err != nil {
+			log.Fatal("workspace self-test could not restore its archive")
+		}
+		fmt.Println("WEB_IDE_WORKSPACE_SELFTEST_READY")
+		return
+	}
+	if len(os.Args) != 1 {
+		log.Fatal("unsupported workspace service arguments")
+	}
 	if err := watchWorkspace(w); err != nil {
 		log.Fatal("workspace watcher unavailable")
 	}

@@ -1,6 +1,7 @@
 --- a/Dockerfile
 +++ b/Dockerfile
-@@ -376,6 +376,15 @@
+@@ -375,7 +375,16 @@
+ FROM glib-emscripten-base AS zlib-emscripten-dev
  ARG ZLIB_VERSION
  RUN mkdir -p /zlib
 -RUN curl -LsS https://zlib.net/fossils/zlib-$ZLIB_VERSION.tar.gz | tar zxC /zlib --strip-components=1
@@ -17,9 +18,27 @@
  WORKDIR /zlib
  RUN emconfigure ./configure --prefix=$TARGET --static
  RUN make install
---- a/Dockerfile
-+++ b/Dockerfile
-@@ -739,7 +739,8 @@
+@@ -691,7 +700,18 @@
+ RUN apt-get install -y libelf-dev
+ WORKDIR /work-buildlinux/linux
+ COPY --link --from=assets ./config/qemu/linux_x86_config ./.config
+-RUN make ARCH=x86 CROSS_COMPILE=x86_64-linux-gnu- -j$(nproc) all && \
++RUN scripts/config --enable NETFILTER --enable NETFILTER_ADVANCED \
++      --enable NF_CONNTRACK --enable NF_NAT --enable NETFILTER_XTABLES \
++      --enable NETFILTER_XT_MARK --enable NETFILTER_XT_MATCH_ADDRTYPE \
++      --enable NETFILTER_XT_MATCH_CONNTRACK --enable NETFILTER_XT_MATCH_COMMENT \
++      --enable NETFILTER_XT_TARGET_MASQUERADE --enable NETFILTER_XT_TARGET_CHECKSUM \
++      --enable IP_NF_IPTABLES --enable IP_NF_FILTER --enable IP_NF_NAT \
++      --enable IP_NF_TARGET_MASQUERADE --enable BRIDGE --enable BRIDGE_NETFILTER \
++      --enable VETH --enable NETFILTER_XT_MATCH_PHYSDEV \
++      --enable IP6_NF_IPTABLES --enable IP6_NF_FILTER --enable IP6_NF_NAT \
++      --enable POSIX_MQUEUE && \
++    make ARCH=x86 CROSS_COMPILE=x86_64-linux-gnu- olddefconfig && \
++    make ARCH=x86 CROSS_COMPILE=x86_64-linux-gnu- -j$(nproc) all && \
+     mkdir /out && \
+     mv /work-buildlinux/linux/arch/x86/boot/bzImage /out/bzImage && \
+     make clean
+@@ -739,7 +759,8 @@
  WORKDIR /work
  RUN --mount=type=cache,target=/root/.cache/go-build \
      --mount=type=cache,target=/go/pkg/mod \
@@ -29,7 +48,7 @@
  
  FROM ubuntu:22.04 AS qemu-config-dev-amd64
  ARG LINUX_LOGLEVEL
-@@ -813,11 +814,28 @@
+@@ -813,11 +834,28 @@
  RUN cp /qemu/pc-bios/efi-virtio.rom /pack/
  
  COPY --link --from=get-qemu-state-dev /out/get-qemu-state /get-qemu-state
@@ -104,12 +123,12 @@
  	}
  	if o, err := exec.Command("ip", "link", "set", "dev", "lo", "up").CombinedOutput(); err != nil {
  		return fmt.Errorf("failed lo up: %v: %w", string(o), err)
- 	}
- 
-+	if info.withNet {
-+		startWebIDEClockSync()
 +	}
 +
++	if info.withNet {
++		startWebIDEClockSync()
+ 	}
+ 
  	if externalBundle {
 --- a/config/qemu/linux_x86_config
 +++ b/config/qemu/linux_x86_config
@@ -124,14 +143,15 @@
  # CONFIG_KALLSYMS is not set
 --- a/cmd/create-spec/main.go
 +++ b/cmd/create-spec/main.go
-@@ -18,5 +18,6 @@
+@@ -17,6 +17,7 @@
+ 	"github.com/containerd/containerd/images"
  	ctdnamespaces "github.com/containerd/containerd/namespaces"
  	ctdoci "github.com/containerd/containerd/oci"
 +	ctdcap "github.com/containerd/containerd/pkg/cap"
  	"github.com/containerd/platforms"
  	inittype "github.com/ktock/container2wasm/cmd/init/types"
  	"github.com/moby/sys/user"
-@@ -327,6 +328,13 @@
+@@ -328,6 +329,13 @@
  		ctdoci.WithEnv(ic.Env),
  		ctdoci.WithTTY,           // TODO: make it configurable
  		ctdoci.WithNewPrivileges, // TODO: make it configurable
@@ -145,25 +165,3 @@
  	)
  	if err != nil {
  		return nil, fmt.Errorf("failed to generate spec: %w", err)
---- a/Dockerfile
-+++ b/Dockerfile
-@@ -687,7 +687,18 @@
- RUN apt-get install -y libelf-dev
- WORKDIR /work-buildlinux/linux
- COPY --link --from=assets ./config/qemu/linux_x86_config ./.config
--RUN make ARCH=x86 CROSS_COMPILE=x86_64-linux-gnu- -j$(nproc) all && \
-+RUN scripts/config --enable NETFILTER --enable NETFILTER_ADVANCED \
-+      --enable NF_CONNTRACK --enable NF_NAT --enable NETFILTER_XTABLES \
-+      --enable NETFILTER_XT_MARK --enable NETFILTER_XT_MATCH_ADDRTYPE \
-+      --enable NETFILTER_XT_MATCH_CONNTRACK --enable NETFILTER_XT_MATCH_COMMENT \
-+      --enable NETFILTER_XT_TARGET_MASQUERADE --enable NETFILTER_XT_TARGET_CHECKSUM \
-+      --enable IP_NF_IPTABLES --enable IP_NF_FILTER --enable IP_NF_NAT \
-+      --enable IP_NF_TARGET_MASQUERADE --enable BRIDGE --enable BRIDGE_NETFILTER \
-+      --enable VETH --enable NETFILTER_XT_MATCH_PHYSDEV \
-+      --enable IP6_NF_IPTABLES --enable IP6_NF_FILTER --enable IP6_NF_NAT \
-+      --enable POSIX_MQUEUE && \
-+    make ARCH=x86 CROSS_COMPILE=x86_64-linux-gnu- olddefconfig && \
-+    make ARCH=x86 CROSS_COMPILE=x86_64-linux-gnu- -j$(nproc) all && \
-     mkdir /out && \
-     mv /work-buildlinux/linux/arch/x86/boot/bzImage /out/bzImage && \
-     make clean

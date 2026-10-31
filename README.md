@@ -6,7 +6,7 @@ The page loads a QEMU-Wasm emulator and a Debian amd64 guest, displays loading p
 
 ## Current status
 
-A local browser guest has passed functional checks for the demo file tree, opening and saving a guest file, integrated Bash, and all three demos. Startup and first use can still take several minutes on the client: a visible editor or successful HTTP health check can precede working file operations. This remains experimental. Each published image and deployment needs its own fresh-browser verification; native guest tests alone do not establish browser acceptance.
+A local browser guest has passed functional checks for the demo file tree, opening and saving a guest file, integrated Bash, and all three demos. Startup and first use can still take several minutes on the client: a visible editor or successful HTTP health check can precede working file operations. Keep the tab in the foreground during startup and interactive work; background throttling can delay the VM. This remains experimental. Each published image and deployment needs its own fresh-browser verification; native guest tests alone do not establish browser acceptance.
 
 ## Architecture
 
@@ -109,7 +109,7 @@ Cross-Origin-Embedder-Policy: credentialless
 Cross-Origin-Resource-Policy: same-origin
 ```
 
-Editor resources use `Cross-Origin-Embedder-Policy: credentialless` and `Cross-Origin-Resource-Policy: cross-origin` so the isolated page can embed the editor. An upstream proxy must preserve these headers. The page checks `window.crossOriginIsolated` and refuses to start when isolation is unavailable. Ordinary public HTTP is insufficient. Keep byte-range responses for the large VM assets intact and avoid proxy compression or rewriting of those files.
+The parent delegates clipboard read/write capabilities to the editor iframe; the browser still controls clipboard permission. Editor resources use `Cross-Origin-Embedder-Policy: credentialless` and `Cross-Origin-Resource-Policy: cross-origin` so the isolated page can embed the editor. An upstream proxy must preserve these headers. The page checks `window.crossOriginIsolated` and refuses to start when isolation is unavailable. Ordinary public HTTP is insufficient. Keep byte-range responses for the large VM assets intact and avoid proxy compression or rewriting of those files.
 
 ## Browser sessions and persistence
 

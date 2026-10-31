@@ -11,8 +11,9 @@
       <p class="mark">Web-IDE</p>
       <p id="status">Loading the virtual machine</p>
       <div class="track" aria-hidden="true"><div id="bar"></div></div>
+      <p class="boot-hint">Keep this tab active while Linux starts.</p>
     </div>
-    <iframe id="ide" title="VS Code" hidden></iframe>
+    <iframe id="ide" title="VS Code" allow="clipboard-read; clipboard-write" hidden></iframe>
     <div id="workspace-tools" hidden>
       <span id="workspace-status" role="status">Preparing workspace…</span>
       <button id="save-workspace" type="button">Save workspace</button>

@@ -424,7 +424,13 @@ export async function warmGuest(backendURL, { timeoutMs = 120000, WebSocketImpl 
     } finally { await client.call("remoteterminal", "$shutdown", [terminalId, true]); }
     log("actual Bash PTY ready");
     log("BEGIN embedded server isolation");
-    for (const file of ["/proc/net/tcp", "/proc/net/tcp6"]) {
+    const networkEntries = await client.call("remoteFilesystem", "readdir", [resource("/proc/net")]);
+    if (!Array.isArray(networkEntries) || !networkEntries.some(entry => Array.isArray(entry) && entry[0] === "tcp")) {
+      throw new Error("Guest TCP listener table is missing");
+    }
+    const tables = ["tcp", ...(networkEntries.some(entry => Array.isArray(entry) && entry[0] === "tcp6") ? ["tcp6"] : [])];
+    for (const name of tables) {
+      const file = `/proc/net/${name}`;
       const table = await client.call("remoteFilesystem", "readFile", [resource(file), {}]);
       if (!Buffer.isBuffer(table)) throw new Error("Guest TCP listeners could not be inspected");
       for (const line of table.toString("utf8").trim().split("\n").slice(1)) {

@@ -140,6 +140,7 @@ async function backend(t, mode = "ok") {
           if (mode === "reject" && method === "$getLatency") { reply(requestId, { name: "Error", message: "Child not ready" }, 202); continue; }
           if (method === "getEnvironmentData") reply(requestId, { pid: 42, os: 3, arch: "x64", connectionToken: "must-never-be-logged" });
           else if (method === "scanExtensions") reply(requestId, [{ id: "vscode.python", identifier: { value: "vscode.python" } }]);
+          else if (method === "readdir" && argument[0].path === "/proc/net") reply(requestId, mode === "ipv4-only" ? [["tcp", 1]] : mode === "missing-tcp" ? [["tcp6", 1]] : [["tcp", 1], ["tcp6", 1]]);
           else if (method === "readdir") reply(requestId, mode === "missing-demo" ? [] : [["python", 2], ["node", 2], ["hugo", 2], ["run-all.sh", 1]]);
           else if (method === "$getLatency") reply(requestId, [{ label: "ptyhostservice<->ptyhost", latency: 1 }]);
           else if (method === "writeFile" || method === "delete" || method === "$shutdown") reply(requestId, undefined);
@@ -199,6 +200,7 @@ test("real WebSocket file stream, save round trip and Bash PTY are required befo
     ["remoteFilesystem", "writeFile"], ["remoteFilesystem", "readFile"], ["remoteFilesystem", "delete"],
     ["remoteterminal", "$getLatency"], ["remoteterminal", "$createProcess"],
     ["remoteterminal", "$start"], ["remoteterminal", "$shutdown"],
+    ["remoteFilesystem", "readdir"],
     ["remoteFilesystem", "readFile"], ["remoteFilesystem", "readFile"],
   ]);
   assert.deepEqual(server.requests[1].argument, ["en", null, [], [], null]);
@@ -207,7 +209,14 @@ test("real WebSocket file stream, save round trip and Bash PTY are required befo
   assert.doesNotMatch(JSON.stringify({ result, logs }), /must-never-be-logged/);
 });
 
-for (const mode of ["timeout", "reject", "missing-demo", "read-failed", "save-failed", "missing-pty", "bash-failed", "duplicate-server", "duplicate-server-ipv6"]) {
+test("an IPv4-only guest still checks its available listener table", async (t) => {
+  const server = await backend(t, "ipv4-only");
+  const result = await warmGuest(server.url, { timeoutMs: 2000 });
+  assert.equal(result.singleServerReady, true);
+  assert.equal(server.requests.some(request => request.method === "readFile" && request.argument[0].path === "/proc/net/tcp6"), false);
+});
+
+for (const mode of ["timeout", "reject", "missing-demo", "read-failed", "save-failed", "missing-pty", "bash-failed", "duplicate-server", "duplicate-server-ipv6", "missing-tcp"]) {
   test(`${mode} cannot produce a successful warmup`, async (t) => {
     const server = await backend(t, mode);
     await assert.rejects(warmGuest(server.url, { timeoutMs: mode === "timeout" ? 100 : 2000 }), /timed out|rejected|missing|stream failed|round trip|real PTY|did not start|duplicate standalone server/);

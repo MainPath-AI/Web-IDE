@@ -423,7 +423,19 @@ export async function warmGuest(backendURL, { timeoutMs = 120000, WebSocketImpl 
       if (startError) throw new Error("Guest Bash PTY did not start");
     } finally { await client.call("remoteterminal", "$shutdown", [terminalId, true]); }
     log("actual Bash PTY ready");
-    return { commit: configuration.commit, extensionCount: extensions.length, demoEntryCount: entries.length, ptyHostReady: true, fileSaveReady: true, bashPtyReady: true };
+    log("BEGIN embedded server isolation");
+    for (const file of ["/proc/net/tcp", "/proc/net/tcp6"]) {
+      const table = await client.call("remoteFilesystem", "readFile", [resource(file), {}]);
+      if (!Buffer.isBuffer(table)) throw new Error("Guest TCP listeners could not be inspected");
+      for (const line of table.toString("utf8").trim().split("\n").slice(1)) {
+        const columns = line.trim().split(/\s+/);
+        if (columns[3] === "0A" && parseInt(columns[1]?.split(":")[1], 16) === 8000) {
+          throw new Error("Embedded VS Code started a duplicate standalone server");
+        }
+      }
+    }
+    log("embedded server isolation ready");
+    return { commit: configuration.commit, extensionCount: extensions.length, demoEntryCount: entries.length, ptyHostReady: true, fileSaveReady: true, bashPtyReady: true, singleServerReady: true };
   } finally {
     await client.close();
   }

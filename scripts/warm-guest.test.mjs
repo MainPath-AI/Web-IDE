@@ -143,6 +143,10 @@ async function backend(t, mode = "ok") {
           else if (method === "readdir") reply(requestId, mode === "missing-demo" ? [] : [["python", 2], ["node", 2], ["hugo", 2], ["run-all.sh", 1]]);
           else if (method === "$getLatency") reply(requestId, [{ label: "ptyhostservice<->ptyhost", latency: 1 }]);
           else if (method === "writeFile" || method === "delete" || method === "$shutdown") reply(requestId, undefined);
+          else if (method === "readFile" && argument[0].path.startsWith("/proc/net/tcp")) {
+            const duplicate = mode === "duplicate-server" && argument[0].path === "/proc/net/tcp" || mode === "duplicate-server-ipv6" && argument[0].path === "/proc/net/tcp6";
+            reply(requestId, Buffer.from("sl local_address rem_address st\n0: 0100007F:" + (duplicate ? "1F40" : "1F90") + " 00000000:0000 0A\n"));
+          }
           else if (method === "readFile") reply(requestId, Buffer.from(mode === "save-failed" ? "wrong" : "web-ide native file warmup\n"));
           else if (method === "$createProcess") reply(requestId, { persistentTerminalId: mode === "missing-pty" ? 0 : 7 });
           else if (method === "$start") reply(requestId, mode === "bash-failed" ? { message: "spawn failed" } : undefined);
@@ -188,13 +192,14 @@ test("real WebSocket file stream, save round trip and Bash PTY are required befo
   const server = await backend(t);
   const logs = [];
   const result = await warmGuest(server.url, { timeoutMs: 2000, log: (message) => logs.push(message) });
-  assert.deepEqual(result, { commit, extensionCount: 1, demoEntryCount: 4, ptyHostReady: true, fileSaveReady: true, bashPtyReady: true });
+  assert.deepEqual(result, { commit, extensionCount: 1, demoEntryCount: 4, ptyHostReady: true, fileSaveReady: true, bashPtyReady: true, singleServerReady: true });
   assert.deepEqual(server.requests.map(({ channel, method }) => [channel, method]), [
     ["remoteextensionsenvironment", "getEnvironmentData"], ["remoteExtensionsScanner", "scanExtensions"],
     ["remoteFilesystem", "readdir"], ["remoteFilesystem", "readFileStream"],
     ["remoteFilesystem", "writeFile"], ["remoteFilesystem", "readFile"], ["remoteFilesystem", "delete"],
     ["remoteterminal", "$getLatency"], ["remoteterminal", "$createProcess"],
     ["remoteterminal", "$start"], ["remoteterminal", "$shutdown"],
+    ["remoteFilesystem", "readFile"], ["remoteFilesystem", "readFile"],
   ]);
   assert.deepEqual(server.requests[1].argument, ["en", null, [], [], null]);
   assert.equal(server.requests[2].argument[0].path, "/opt/web-ide/demos");
@@ -202,10 +207,10 @@ test("real WebSocket file stream, save round trip and Bash PTY are required befo
   assert.doesNotMatch(JSON.stringify({ result, logs }), /must-never-be-logged/);
 });
 
-for (const mode of ["timeout", "reject", "missing-demo", "read-failed", "save-failed", "missing-pty", "bash-failed"]) {
+for (const mode of ["timeout", "reject", "missing-demo", "read-failed", "save-failed", "missing-pty", "bash-failed", "duplicate-server", "duplicate-server-ipv6"]) {
   test(`${mode} cannot produce a successful warmup`, async (t) => {
     const server = await backend(t, mode);
-    await assert.rejects(warmGuest(server.url, { timeoutMs: mode === "timeout" ? 100 : 2000 }), /timed out|rejected|missing|stream failed|round trip|real PTY|did not start/);
+    await assert.rejects(warmGuest(server.url, { timeoutMs: mode === "timeout" ? 100 : 2000 }), /timed out|rejected|missing|stream failed|round trip|real PTY|did not start|duplicate standalone server/);
     assert.equal(server.disconnected, true);
   });
 }

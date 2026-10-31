@@ -48,12 +48,8 @@ SETTINGS
 /usr/local/bin/web-ide-workspace >/var/log/workspace.log 2>&1 &
 
 code_root="$(echo /opt/code-server-*-linux-amd64)"
-entry="${code_root}/out/node/entry.js"
-if [ -f "${entry}" ]; then
-  # Preserve the existing single-process launcher while collecting startup
-  # diagnostics. The stock launcher performs an additional IPC handshake.
-  sed -i 's/return wrapper_1.wrapper.start(args);/return (0, main_1.runCodeServer)(args);/' "${entry}" || true
-fi
+# Keep the stock launcher and its parent/child handshake. Its child marker
+# prevents the embedded VS Code module from also starting a standalone server.
 
 log_file=/var/log/code-server.log
 : > "${log_file}"
